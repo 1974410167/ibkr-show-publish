@@ -5,6 +5,7 @@ import { useAccountOverviewData } from '@/composables/accountOverview'
 import EquityCurveSimple from '@/components/EquityCurveSimple.vue'
 import ErrorBlock from '@/components/ErrorBlock.vue'
 import LoadingBlock from '@/components/LoadingBlock.vue'
+import PerformanceBenchmarkPanel from '@/components/PerformanceBenchmarkPanel.vue'
 import PerformanceCalendar from '@/components/PerformanceCalendar.vue'
 import StatCard from '@/components/StatCard.vue'
 import type { EquityCurvePoint } from '@/types/charts'
@@ -129,6 +130,7 @@ onUnmounted(() => {
         :selected-range="selectedRange"
         @select-range="setCurveRange"
       />
+      <PerformanceBenchmarkPanel :latest-report-date="overview?.report_date ?? null" />
       <PerformanceCalendar :latest-report-date="overview?.report_date ?? null" />
     </template>
   </section>

@@ -29,6 +29,8 @@ class TradeDecisionGraphState(BaseGraphState, total=False):
 
     account_fact_snapshot: AccountFactSnapshot | dict | None
     user_investment_policy: dict | None
+    behavior_profile_context: dict | None
+    behavior_profile_metadata: dict | None
     ai_policy_assessment: dict | None
 
     account_fit_card: AccountFitCard | None

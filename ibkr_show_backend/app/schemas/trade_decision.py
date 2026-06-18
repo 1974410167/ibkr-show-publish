@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -136,6 +138,8 @@ class TradeDecisionResult(BaseModel):
     risk_gate: dict = Field(default_factory=dict)
     user_investment_policy_summary: dict | None = None
     ai_policy_assessment: dict = Field(default_factory=dict)
+    behavior_profile_summary: dict | None = None
+    personal_behavior_reminders: list[dict] = Field(default_factory=list)
     decision_quality: dict = Field(default_factory=dict)
     run_trace: list[AgentRunTraceItem] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
@@ -227,3 +231,306 @@ class TradeDecisionOutcomeSummary(BaseModel):
 class TradeDecisionOutcomeListResponse(BaseModel):
     items: list[TradeDecisionOutcomeItem]
     summary: TradeDecisionOutcomeSummary
+
+
+class TradeDecisionBacktestSummary(BaseModel):
+    start_date: str | None = None
+    end_date: str | None = None
+    initial_cash: float
+    final_equity: float
+    total_return: float | None = None
+    annualized_return: float | None = None
+    max_drawdown: float | None = None
+    sharpe_ratio: float | None = None
+    volatility: float | None = None
+    win_rate: float
+    trade_count: int
+    buy_count: int
+    sell_count: int
+    hold_count: int
+    skipped_count: int
+    turnover: float | None = None
+    avg_cash_ratio: float | None = None
+    max_single_position_pct: float | None = None
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    calibrated_action_success_pnl: float
+    missed_ai_add_opportunity_estimated_cost: float
+    risk_gate_avoided_loss_estimated_value: float
+    bad_add_realized_or_mark_pnl: float
+    sold_too_early_estimated_cost: float
+
+
+class TradeDecisionBacktestDailyPoint(BaseModel):
+    date: str
+    cash: float
+    positions_value: float
+    equity: float
+    daily_return: float | None = None
+    cumulative_return: float | None = None
+    drawdown: float | None = None
+    benchmark_value: float | None = None
+    benchmark_return: float | None = None
+    positions: dict = Field(default_factory=dict)
+
+
+class TradeDecisionBacktestTrade(BaseModel):
+    decision_id: str
+    decision_date: str | None = None
+    execution_date: str | None = None
+    symbol: str
+    final_action: str
+    action_group: str
+    side: str
+    quantity: float
+    execution_price: float | None = None
+    notional: float
+    commission: float
+    target_position_pct: float | None = None
+    max_position_pct: float | None = None
+    realized_pnl: float | None = None
+    mark_pnl: float | None = None
+    reason: str
+
+
+class TradeDecisionBacktestPosition(BaseModel):
+    symbol: str
+    quantity: float
+    avg_cost: float
+    last_price: float | None = None
+    market_value: float
+    weight: float | None = None
+    unrealized_pnl: float
+    realized_pnl: float
+
+
+class TradeDecisionBacktestGroupStat(BaseModel):
+    key: str
+    trade_count: int
+    avg_trade_return: float | None = None
+    win_rate: float
+    total_notional: float
+    contribution_pnl: float
+    avg_holding_days: float | None = None
+
+
+class TradeDecisionBacktestResponse(BaseModel):
+    version: str
+    params: dict
+    summary: TradeDecisionBacktestSummary
+    equity_curve: list[TradeDecisionBacktestDailyPoint] = Field(default_factory=list)
+    trades: list[TradeDecisionBacktestTrade] = Field(default_factory=list)
+    positions: list[TradeDecisionBacktestPosition] = Field(default_factory=list)
+    symbol_contributions: list[TradeDecisionBacktestGroupStat] = Field(default_factory=list)
+    action_stats: list[TradeDecisionBacktestGroupStat] = Field(default_factory=list)
+    data_limitations: list[str] = Field(default_factory=list)
+
+
+class TradeDecisionMatchedRealTrade(BaseModel):
+    trade_date: str | None = None
+    date_time: str | None = None
+    symbol: str
+    side: str
+    quantity: float
+    trade_price: float | None = None
+    notional: float
+    commission: float | None = None
+    fifo_pnl_realized: float | None = None
+    trade_id: str | None = None
+
+
+class TradeDecisionExecutionAlignmentItem(BaseModel):
+    decision_id: str
+    symbol: str
+    decision_date: str | None = None
+    final_action: str | None = None
+    action_group: str
+    ai_position_stance: str | None = None
+    ai_recommended_action_bias: str | None = None
+    suggested_target_position_pct: float | None = None
+    suggested_adjustment_pct: float | None = None
+    suggested_cash_amount: float | None = None
+    real_trade_side: str
+    real_trade_count: int
+    real_buy_notional: float
+    real_sell_notional: float
+    real_net_notional: float
+    real_weighted_avg_price: float | None = None
+    first_real_trade_date: str | None = None
+    execution_delay_trading_days: int | None = None
+    alignment_label: str
+    behavior_tags: list[str] = Field(default_factory=list)
+    return_5d: float | None = None
+    return_20d: float | None = None
+    estimated_opportunity_cost: float
+    estimated_avoided_loss: float
+    estimated_bad_override_cost: float
+    estimated_good_override_value: float
+    explanation: str
+    matched_trades: list[TradeDecisionMatchedRealTrade] = Field(default_factory=list)
+    data_limitations: list[str] = Field(default_factory=list)
+
+
+class TradeDecisionExecutionAlignmentSummary(BaseModel):
+    version: str
+    total_decisions: int
+    matched_decisions: int
+    evaluated_decisions: int
+    followed_count: int
+    partially_followed_count: int
+    ignored_count: int
+    contradicted_count: int
+    over_executed_count: int
+    no_trade_expected_count: int
+    alignment_rate: float
+    contradiction_rate: float
+    ignored_add_signal_count: int
+    ignored_reduce_signal_count: int
+    manual_override_count: int
+    good_override_count: int
+    bad_override_count: int
+    estimated_opportunity_cost_total: float
+    estimated_avoided_loss_total: float
+    estimated_bad_override_cost_total: float
+    estimated_good_override_value_total: float
+    net_behavior_value: float
+    avg_execution_delay_days: float | None = None
+    shadow_total_return: float | None = None
+    shadow_max_drawdown: float | None = None
+    shadow_sharpe: float | None = None
+    real_account_return_estimate: float | None = None
+    behavior_gap_estimate: float | None = None
+    execution_gap_summary: dict = Field(default_factory=dict)
+    by_symbol: list[dict] = Field(default_factory=list)
+    by_final_action: list[dict] = Field(default_factory=list)
+    by_action_group: list[dict] = Field(default_factory=list)
+    by_ai_recommended_action_bias: list[dict] = Field(default_factory=list)
+    by_behavior_tag: list[dict] = Field(default_factory=list)
+    top_missed_opportunities: list[TradeDecisionExecutionAlignmentItem] = Field(default_factory=list)
+    top_bad_overrides: list[TradeDecisionExecutionAlignmentItem] = Field(default_factory=list)
+    top_good_overrides: list[TradeDecisionExecutionAlignmentItem] = Field(default_factory=list)
+    top_good_discipline: list[TradeDecisionExecutionAlignmentItem] = Field(default_factory=list)
+    top_agent_bad_follow: list[TradeDecisionExecutionAlignmentItem] = Field(default_factory=list)
+    generated_at: str
+    data_limitations: list[str] = Field(default_factory=list)
+
+
+class TradeDecisionExecutionAlignmentListResponse(BaseModel):
+    items: list[TradeDecisionExecutionAlignmentItem]
+    summary: TradeDecisionExecutionAlignmentSummary
+
+
+OverrideReasonCategory = Literal[
+    "emotion",
+    "capital_constraint",
+    "external_information",
+    "disagree_with_agent",
+    "risk_control",
+    "forgot",
+    "execution_issue",
+    "tax_or_cashflow",
+    "other",
+]
+OverrideConfidence = Literal["high", "medium", "low"]
+BehaviorRiskLevel = Literal["low", "medium", "high"]
+BehaviorInsightSeverity = Literal["low", "medium", "high"]
+
+
+class TradeDecisionOverrideAnnotationRequest(BaseModel):
+    override_type: str = Field(default="other", max_length=120)
+    reason_category: OverrideReasonCategory = "other"
+    reason_text: str = Field(default="", max_length=2000)
+    confidence: OverrideConfidence = "medium"
+    was_intentional: bool = True
+    was_emotional: bool = False
+    should_remind_next_time: bool = False
+    lesson: str = Field(default="", max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class TradeDecisionOverrideAnnotation(TradeDecisionOverrideAnnotationRequest):
+    id: str
+    decision_id: str
+    symbol: str
+    decision_date: str | None = None
+    alignment_label: str | None = None
+    behavior_tags: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: str
+    updated_at: str
+
+
+class TradeDecisionOverrideAnnotationListResponse(BaseModel):
+    items: list[TradeDecisionOverrideAnnotation]
+
+
+class TradeDecisionBehaviorInsight(BaseModel):
+    pattern: str
+    severity: BehaviorInsightSeverity
+    count: int
+    rate: float
+    estimated_cost: float
+    symbols: list[str] = Field(default_factory=list)
+    description: str
+    suggestion: str
+
+
+class TradeDecisionBehaviorCoachingHint(BaseModel):
+    pattern: str
+    severity: BehaviorInsightSeverity = "medium"
+    message: str
+    symbols: list[str] = Field(default_factory=list)
+    source: str = "deterministic_profile"
+    annotation_decision_id: str | None = None
+
+
+class TradeDecisionBehaviorProfileItem(BaseModel):
+    decision_id: str
+    symbol: str
+    decision_date: str | None = None
+    final_action: str | None = None
+    alignment_label: str
+    behavior_tags: list[str] = Field(default_factory=list)
+    estimated_opportunity_cost: float
+    estimated_avoided_loss: float
+    estimated_bad_override_cost: float
+    estimated_good_override_value: float
+    profile_contribution: float
+    annotation: TradeDecisionOverrideAnnotation | None = None
+
+
+class TradeDecisionBehaviorProfileSummary(BaseModel):
+    version: str = "trade_decision_behavior_profile_v1"
+    start_date: str | None = None
+    end_date: str | None = None
+    total_decisions: int
+    evaluated_decisions: int
+    alignment_rate: float
+    manual_override_rate: float
+    ignored_add_signal_rate: float
+    ignored_reduce_signal_rate: float
+    contradiction_rate: float
+    over_execution_rate: float
+    under_execution_rate: float
+    premature_trim_rate: float
+    good_override_rate: float
+    bad_override_rate: float
+    net_behavior_value: float
+    estimated_opportunity_cost_total: float
+    estimated_bad_override_cost_total: float
+    estimated_good_override_value_total: float
+    top_behavior_tags: list[dict] = Field(default_factory=list)
+    top_reason_categories: list[dict] = Field(default_factory=list)
+    top_symbols_with_bias: list[dict] = Field(default_factory=list)
+    behavior_risk_level: BehaviorRiskLevel
+    dominant_behavior_patterns: list[TradeDecisionBehaviorInsight] = Field(default_factory=list)
+    coaching_hints: list[TradeDecisionBehaviorCoachingHint] = Field(default_factory=list)
+    generated_at: str
+    data_limitations: list[str] = Field(default_factory=list)
+
+
+class TradeDecisionBehaviorProfileResponse(BaseModel):
+    summary: TradeDecisionBehaviorProfileSummary
+    insights: list[TradeDecisionBehaviorInsight] = Field(default_factory=list)
+    coaching_hints: list[TradeDecisionBehaviorCoachingHint] = Field(default_factory=list)
+    items: list[TradeDecisionBehaviorProfileItem] = Field(default_factory=list)

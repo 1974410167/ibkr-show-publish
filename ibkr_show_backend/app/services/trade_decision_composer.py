@@ -377,6 +377,8 @@ class TradeDecisionComposer:
         output["risk_control"] = _build_risk_control_block(output, card_pack)
         output["user_investment_policy_summary"] = _build_user_investment_policy_summary(output, card_pack)
         output["ai_policy_assessment"] = _resolve_ai_policy_assessment(card_pack)
+        output["behavior_profile_summary"] = _build_behavior_profile_summary(card_pack)
+        output["personal_behavior_reminders"] = _build_personal_behavior_reminders(output, card_pack)
         self._apply_weak_catalyst_language(output, card_pack)
 
         return output
@@ -1304,6 +1306,118 @@ def _resolve_ai_policy_assessment(card_pack: TradeDecisionCardPack) -> dict[str,
     if isinstance(assessment, dict) and assessment:
         return assessment
     return _default_ai_policy_assessment()
+
+
+def _build_behavior_profile_summary(card_pack: TradeDecisionCardPack) -> dict[str, Any]:
+    context = getattr(card_pack, "behavior_profile_context", None)
+    if not isinstance(context, dict) or not context:
+        return {
+            "status": "unavailable",
+            "behavior_risk_level": "unknown",
+            "dominant_behavior_patterns": [],
+            "reminder_enabled": False,
+            "data_limitations": ["behavior_profile_context_missing"],
+        }
+    return {
+        "status": context.get("status") or "unknown",
+        "lookback_days": context.get("lookback_days"),
+        "scope": context.get("scope"),
+        "symbol": context.get("symbol"),
+        "behavior_risk_level": context.get("behavior_risk_level") or "unknown",
+        "dominant_behavior_patterns": _as_string_list(context.get("dominant_behavior_patterns"), limit=5),
+        "top_symbols_with_bias": list(context.get("top_symbols_with_bias") or [])[:5],
+        "net_behavior_value": context.get("net_behavior_value"),
+        "reminder_enabled": bool(context.get("reminder_enabled")),
+        "data_limitations": _as_string_list(context.get("data_limitations"), limit=8),
+        "source": context.get("source") or "behavior_profile_service",
+    }
+
+
+def _build_personal_behavior_reminders(output: dict[str, Any], card_pack: TradeDecisionCardPack) -> list[dict[str, Any]]:
+    context = getattr(card_pack, "behavior_profile_context", None)
+    if not isinstance(context, dict) or not context or not context.get("reminder_enabled"):
+        return []
+    final_action = normalize_action(str(output.get("final_action") or output.get("action") or ""))
+    patterns = set(_as_string_list(context.get("dominant_behavior_patterns"), limit=10))
+    hints = list(context.get("coaching_hints") or [])[:5]
+    recent_lessons = _as_string_list(context.get("recent_lessons"), limit=5)
+    reminders: list[dict[str, Any]] = []
+
+    if _is_add_like_action(final_action) and "ignored_add_signal" in patterns:
+        reminders.append(_behavior_reminder(
+            "ignored_add_signal",
+            "medium",
+            "你过去多次在 AI 判断低配且建议加仓后没有执行，后续出现上涨。本次如果不执行，建议先写下不执行原因。",
+            final_action,
+        ))
+    if _is_add_like_action(final_action) and "under_sized_execution" in patterns:
+        reminders.append(_behavior_reminder(
+            "under_sized_execution",
+            "medium",
+            "你过去有执行方向正确但金额偏小的情况；如果本次决定执行，建议避免只做象征性小额交易，可至少执行计划金额的一部分。",
+            final_action,
+        ))
+    if _is_reduce_like_action(final_action) and "premature_trim" in patterns:
+        reminders.append(_behavior_reminder(
+            "premature_trim",
+            "medium",
+            "你过去有偏早减仓/卖出的倾向。本次减仓前，建议确认 thesis 或 Risk Gate 是否真的支持退出，而不是只受短线波动影响。",
+            final_action,
+        ))
+    if "emotion_driven_trading" in patterns:
+        reminders.append(_behavior_reminder(
+            "emotion_driven_trading",
+            "high" if context.get("behavior_risk_level") == "high" else "medium",
+            "你的历史标注中出现过情绪驱动交易。执行前建议先记录客观原因，并把情绪判断与事实证据分开。",
+            final_action,
+        ))
+
+    for hint in hints:
+        if not isinstance(hint, dict):
+            continue
+        pattern = str(hint.get("pattern") or "").strip()
+        message = str(hint.get("message") or "").strip()
+        if not pattern or not message:
+            continue
+        reminders.append(_behavior_reminder(pattern, str(hint.get("severity") or "medium"), message, final_action))
+
+    for lesson in recent_lessons[:3]:
+        reminders.append(_behavior_reminder(
+            "manual_annotation_lesson",
+            "medium",
+            f"历史人工标注提醒：{lesson}",
+            final_action,
+            source="manual_annotation",
+        ))
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in reminders:
+        key = (str(item.get("type") or ""), str(item.get("message") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:6]
+
+
+def _behavior_reminder(reminder_type: str, severity: str, message: str, related_action: str, *, source: str = "behavior_profile") -> dict[str, Any]:
+    normalized_severity = severity if severity in {"low", "medium", "high"} else "medium"
+    return {
+        "type": reminder_type,
+        "severity": normalized_severity,
+        "message": message,
+        "related_action": related_action,
+        "source": source,
+    }
+
+
+def _is_add_like_action(action: str) -> bool:
+    return action in {"add", "add_small", "add_batch", "add_on_pullback", "add_right_side"}
+
+
+def _is_reduce_like_action(action: str) -> bool:
+    return action in {"reduce", "reduce_batch", "reduce_now", "sell", "sell_thesis_broken", "trim_on_rebound"}
 
 
 def _as_string_list(value: Any, limit: int = 20) -> list[str]:

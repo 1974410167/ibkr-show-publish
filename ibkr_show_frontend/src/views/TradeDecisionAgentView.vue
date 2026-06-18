@@ -6,13 +6,19 @@ import SymbolInput from '@/components/SymbolInput.vue'
 import { formatLocalDateTime } from '@/utils/dateTime'
 
 import {
+  deleteTradeDecisionOverrideAnnotation,
+  fetchTradeDecisionBehaviorProfile,
   fetchTradeDecisionDetail,
+  fetchTradeDecisionAlignmentList,
+  fetchTradeDecisionBacktestDetail,
   fetchTradeDecisionHoldings,
+  fetchTradeDecisionOverrideAnnotation,
   fetchRecentTradeDecisions,
   fetchTradeDecisionHealth,
   fetchTradeDecisionOutcomeList,
   fetchTradeDecisionQualitySummary,
   fetchTradeDecisionTasks,
+  saveTradeDecisionOverrideAnnotation,
   startTradeDecisionTask,
 } from '@/api/tradeDecision'
 import AgentEvidencePanel from '@/components/AgentEvidencePanel.vue'
@@ -25,6 +31,12 @@ import type { AgentTask } from '@/types/agentTasks'
 import type { SymbolAnalysisSnapshot, SymbolAnalysisTask } from '@/types/symbolAnalysis'
 import type {
   AiPolicyAssessment,
+  OverrideConfidence,
+  OverrideReasonCategory,
+  TradeDecisionBehaviorProfileResponse,
+  TradeDecisionExecutionAlignmentListResponse,
+  TradeDecisionExecutionAlignmentItem,
+  TradeDecisionBacktestResponse,
   TradeDecisionHoldingItem,
   TradeDecisionHealth,
   TradeDecisionOutcomeListResponse,
@@ -47,6 +59,20 @@ const qualitySummaryError = ref('')
 const outcomeReplay = ref<TradeDecisionOutcomeListResponse | null>(null)
 const outcomeReplayLoading = ref(false)
 const outcomeReplayError = ref('')
+const backtest = ref<TradeDecisionBacktestResponse | null>(null)
+const backtestLoading = ref(false)
+const backtestError = ref('')
+const alignment = ref<TradeDecisionExecutionAlignmentListResponse | null>(null)
+const alignmentLoading = ref(false)
+const alignmentError = ref('')
+const behaviorProfile = ref<TradeDecisionBehaviorProfileResponse | null>(null)
+const behaviorProfileLoading = ref(false)
+const behaviorProfileError = ref('')
+const annotationDialogVisible = ref(false)
+const annotationDialogError = ref('')
+const annotationSaving = ref(false)
+const annotationTarget = ref<TradeDecisionExecutionAlignmentItem | null>(null)
+const manualAnnotationDecisionIds = ref<Set<string>>(new Set())
 const secondaryDecisionPanelsRequested = ref(false)
 const selectedDecision = ref<TradeDecisionResult | null>(null)
 const taskItems = ref<AgentTask[]>([])
@@ -68,6 +94,26 @@ let taskTimer: number | undefined
 
 const entryForm = reactive({
   symbol: '',
+})
+
+const backtestForm = reactive({
+  days: 180,
+  initial_cash: 100000,
+  benchmark_symbol: 'SPY',
+  execution_timing: 'next_close',
+  include_costs: true,
+})
+
+const annotationForm = reactive({
+  override_type: 'manual_override',
+  reason_category: 'other' as OverrideReasonCategory,
+  reason_text: '',
+  confidence: 'medium' as OverrideConfidence,
+  was_intentional: true,
+  was_emotional: false,
+  should_remind_next_time: false,
+  lesson: '',
+  tags_text: '',
 })
 
 const scoreDimensions: readonly { key: string; label: string; fullWidth?: boolean }[] = [
@@ -141,6 +187,26 @@ const qualityDistributionKeys = ['excellent', 'good', 'warning', 'poor', 'unknow
 const recentQualityTrend = computed(() => (qualitySummary.value?.recent_trend || []).slice(-10).reverse())
 const outcomeSummary = computed(() => outcomeReplay.value?.summary || null)
 const outcomeItems = computed(() => (outcomeReplay.value?.items || []).slice(0, 12))
+const backtestSummary = computed(() => backtest.value?.summary || null)
+const alignmentSummary = computed(() => alignment.value?.summary || null)
+const alignmentItems = computed(() => (alignment.value?.items || []).slice(0, 12))
+const behaviorProfileSummary = computed(() => behaviorProfile.value?.summary || null)
+const behaviorProfileItems = computed(() => behaviorProfile.value?.items || [])
+const behaviorAnnotationByDecision = computed(() => {
+  const lookup = new Map<string, boolean>()
+  behaviorProfileItems.value.forEach((item) => {
+    if (item.annotation) lookup.set(item.decision_id, true)
+  })
+  return lookup
+})
+const hasAnnotationForDecision = (decisionId: string): boolean => behaviorAnnotationByDecision.value.has(decisionId) || manualAnnotationDecisionIds.value.has(decisionId)
+const behaviorReminderHints = computed(() => (behaviorProfile.value?.coaching_hints || []).filter((item) => item.source === 'manual_annotation').slice(0, 5))
+const backtestCurvePreview = computed(() => {
+  const curve = backtest.value?.equity_curve || []
+  if (curve.length <= 16) return curve
+  const step = Math.ceil(curve.length / 16)
+  return curve.filter((_, index) => index % step === 0).slice(0, 16)
+})
 
 function hasPosition(symbol: string): TradeDecisionHoldingItem | undefined {
   return currentHoldings.value.find((h) => h.symbol === symbol.trim().toUpperCase())
@@ -160,6 +226,11 @@ function formatSignedPct(value: number | null | undefined): string {
   if (value === null || value === undefined) return '--'
   if (value === 0) return '0.00%'
   return `${value > 0 ? '+' : ''}${formatNumber(value * 100, 2)}%`
+}
+
+function formatMoney(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '--'
+  return new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
 }
 
 function asNumber(value: unknown): number | null {
@@ -309,6 +380,116 @@ function outcomeClass(value: string | undefined | null): string {
   return 'p-tag--accent'
 }
 
+function executionTimingLabel(value: string | undefined | null): string {
+  const labels: Record<string, string> = {
+    next_close: '次日收盘',
+    same_close: '当日收盘',
+    next_open: '次日开盘',
+  }
+  return labels[String(value || '')] ?? (value || '--')
+}
+
+function tradeSideLabel(value: string | undefined | null): string {
+  const labels: Record<string, string> = {
+    buy: '买入',
+    sell: '卖出',
+    none: '未交易',
+  }
+  return labels[String(value || '')] ?? (value || '--')
+}
+
+function alignmentLabel(value: string | undefined | null): string {
+  const labels: Record<string, string> = {
+    followed: '已跟随',
+    partially_followed: '部分跟随',
+    ignored: '忽略建议',
+    contradicted: '反向/冲突',
+    over_executed: '执行过重',
+    no_trade_expected: '符合不交易',
+    unknown: '未知',
+  }
+  return labels[String(value || '')] ?? (value || '--')
+}
+
+function alignmentClass(value: string | undefined | null): string {
+  if (['followed', 'no_trade_expected'].includes(String(value || ''))) return 'p-tag--positive'
+  if (['ignored', 'partially_followed', 'over_executed'].includes(String(value || ''))) return 'p-tag--warning'
+  if (String(value || '') === 'contradicted') return 'p-tag--negative'
+  return 'p-tag--accent'
+}
+
+function behaviorTagLabel(value: string): string {
+  const labels: Record<string, string> = {
+    ignored_add_signal: '忽略加仓信号',
+    ignored_reduce_signal: '忽略减仓信号',
+    manual_contrarian_buy: '逆建议买入',
+    manual_contrarian_sell: '逆建议卖出',
+    over_sized_execution: '执行过重',
+    under_sized_execution: '执行偏轻',
+    panic_sell_against_gate: '恐慌卖出',
+    premature_trim: '过早卖出',
+    good_override: '好 override',
+    bad_override: '坏 override',
+    good_discipline: '纪律执行有效',
+    bad_follow: '跟随但结果差',
+    emotion_driven_trading: '情绪驱动交易',
+    harmful_manual_override: '有害 override',
+    contrarian_buy_loss: '逆向买入亏损',
+  }
+  return labels[value] ?? value
+}
+
+function reasonCategoryLabel(value: string): string {
+  const labels: Record<string, string> = {
+    emotion: '情绪',
+    capital_constraint: '资金限制',
+    external_information: '外部信息',
+    disagree_with_agent: '不同意 Agent',
+    risk_control: '主动风控',
+    forgot: '忘记执行',
+    execution_issue: '执行问题',
+    tax_or_cashflow: '税务/现金流',
+    other: '其他',
+  }
+  return labels[value] ?? value
+}
+
+function behaviorRiskLabel(value: string | undefined | null): string {
+  const labels: Record<string, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+  }
+  return labels[String(value || '')] ?? '--'
+}
+
+function behaviorRiskClass(value: string | undefined | null): string {
+  if (value === 'low') return 'p-tag--positive'
+  if (value === 'high') return 'p-tag--negative'
+  return 'p-tag--warning'
+}
+
+function reminderSeverityClass(value: string | undefined | null): string {
+  if (value === 'high') return 'p-tag--negative'
+  if (value === 'medium') return 'p-tag--warning'
+  return 'p-tag--accent'
+}
+
+function statKeyLabel(value: string): string {
+  return value
+    .replace('final_action:', '动作：')
+    .replace('action_group:', '分组：')
+    .replace('add_like', '加仓类')
+    .replace('hold_like', '持有/等待类')
+    .replace('reduce_like', '减仓类')
+}
+
+function curvePointHeight(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '4px'
+  const pct = Math.max(6, Math.min(100, 50 + value * 240))
+  return `${pct}%`
+}
+
 function finalActionAlignmentLabel(decision: TradeDecisionResult | null, assessment: AiPolicyAssessment | null): string {
   if (!decision || !assessment || assessment.status !== 'evaluated') return '未评估'
   const finalAction = decision.final_action || decision.action
@@ -450,11 +631,194 @@ async function loadOutcomeReplay(): Promise<void> {
   }
 }
 
+async function loadBacktest(): Promise<void> {
+  backtestLoading.value = true
+  backtestError.value = ''
+  try {
+    backtest.value = await fetchTradeDecisionBacktestDetail({
+      days: backtestForm.days,
+      initial_cash: backtestForm.initial_cash,
+      benchmark_symbol: backtestForm.benchmark_symbol.trim() || 'SPY',
+      execution_timing: backtestForm.execution_timing,
+      include_costs: backtestForm.include_costs ? 1 : 0,
+    })
+  } catch (error) {
+    backtest.value = null
+    backtestError.value = error instanceof Error ? error.message : '加载虚拟组合回测失败'
+  } finally {
+    backtestLoading.value = false
+  }
+}
+
+async function loadAlignment(): Promise<void> {
+  alignmentLoading.value = true
+  alignmentError.value = ''
+  try {
+    alignment.value = await fetchTradeDecisionAlignmentList({ days: 180, match_window_days: 5, limit: 300 })
+  } catch (error) {
+    alignment.value = null
+    alignmentError.value = error instanceof Error ? error.message : '加载真实执行对齐失败'
+  } finally {
+    alignmentLoading.value = false
+  }
+}
+
+async function loadBehaviorProfile(): Promise<void> {
+  behaviorProfileLoading.value = true
+  behaviorProfileError.value = ''
+  try {
+    behaviorProfile.value = await fetchTradeDecisionBehaviorProfile({ days: 180, limit: 300 })
+  } catch (error) {
+    behaviorProfile.value = null
+    behaviorProfileError.value = error instanceof Error ? error.message : '加载交易行为画像失败'
+  } finally {
+    behaviorProfileLoading.value = false
+  }
+}
+
+function resetAnnotationForm(): void {
+  annotationForm.override_type = 'manual_override'
+  annotationForm.reason_category = 'other'
+  annotationForm.reason_text = ''
+  annotationForm.confidence = 'medium'
+  annotationForm.was_intentional = true
+  annotationForm.was_emotional = false
+  annotationForm.should_remind_next_time = false
+  annotationForm.lesson = ''
+  annotationForm.tags_text = ''
+}
+
+async function openAnnotationDialog(item: TradeDecisionExecutionAlignmentItem): Promise<void> {
+  annotationTarget.value = item
+  annotationDialogVisible.value = true
+  annotationDialogError.value = ''
+  resetAnnotationForm()
+  try {
+    const annotation = await fetchTradeDecisionOverrideAnnotation(item.decision_id)
+    manualAnnotationDecisionIds.value = new Set([...manualAnnotationDecisionIds.value, item.decision_id])
+    annotationForm.override_type = annotation.override_type || 'manual_override'
+    annotationForm.reason_category = annotation.reason_category
+    annotationForm.reason_text = annotation.reason_text || ''
+    annotationForm.confidence = annotation.confidence
+    annotationForm.was_intentional = annotation.was_intentional
+    annotationForm.was_emotional = annotation.was_emotional
+    annotationForm.should_remind_next_time = annotation.should_remind_next_time
+    annotationForm.lesson = annotation.lesson || ''
+    annotationForm.tags_text = annotation.tags.join(', ')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message && !message.includes('404') && !message.includes('not found')) {
+      annotationDialogError.value = message
+    }
+  }
+}
+
+function alignmentItemFromDecision(decision: TradeDecisionResult): TradeDecisionExecutionAlignmentItem {
+  const finalAction = decision.final_action || decision.action || null
+  return {
+    decision_id: decision.id,
+    symbol: decision.symbol,
+    decision_date: decision.created_at ? decision.created_at.slice(0, 10) : null,
+    final_action: finalAction,
+    action_group: 'unknown',
+    ai_position_stance: selectedAiPolicyAssessment.value?.ai_position_stance || null,
+    ai_recommended_action_bias: selectedAiPolicyAssessment.value?.recommended_action_bias || null,
+    suggested_target_position_pct: decision.position_advice.suggested_target_position_pct ?? null,
+    suggested_adjustment_pct: positionAdjustmentPct(decision),
+    suggested_cash_amount: decision.position_advice.suggested_cash_amount ?? null,
+    real_trade_side: 'none',
+    real_trade_count: 0,
+    real_buy_notional: 0,
+    real_sell_notional: 0,
+    real_net_notional: 0,
+    real_weighted_avg_price: null,
+    first_real_trade_date: null,
+    execution_delay_trading_days: null,
+    alignment_label: 'unknown',
+    behavior_tags: [],
+    return_5d: null,
+    return_20d: null,
+    estimated_opportunity_cost: 0,
+    estimated_avoided_loss: 0,
+    estimated_bad_override_cost: 0,
+    estimated_good_override_value: 0,
+    explanation: '从交易决策详情页手动标注，暂未匹配真实执行对齐数据。',
+    matched_trades: [],
+    data_limitations: ['decision_detail_annotation_without_alignment_snapshot'],
+  }
+}
+
+async function openDecisionAnnotationDialog(decision: TradeDecisionResult): Promise<void> {
+  await openAnnotationDialog(alignmentItemFromDecision(decision))
+}
+
+function closeAnnotationDialog(): void {
+  annotationDialogVisible.value = false
+  annotationTarget.value = null
+  annotationDialogError.value = ''
+  resetAnnotationForm()
+}
+
+function annotationTags(): string[] {
+  return annotationForm.tags_text
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 20)
+}
+
+async function saveAnnotation(): Promise<void> {
+  if (!annotationTarget.value) return
+  annotationSaving.value = true
+  annotationDialogError.value = ''
+  try {
+    await saveTradeDecisionOverrideAnnotation(annotationTarget.value.decision_id, {
+      override_type: annotationForm.override_type.trim() || 'manual_override',
+      reason_category: annotationForm.reason_category,
+      reason_text: annotationForm.reason_text.trim(),
+      confidence: annotationForm.confidence,
+      was_intentional: annotationForm.was_intentional,
+      was_emotional: annotationForm.was_emotional,
+      should_remind_next_time: annotationForm.should_remind_next_time,
+      lesson: annotationForm.lesson.trim(),
+      tags: annotationTags(),
+    })
+    manualAnnotationDecisionIds.value = new Set([...manualAnnotationDecisionIds.value, annotationTarget.value.decision_id])
+    closeAnnotationDialog()
+    await loadBehaviorProfile()
+  } catch (error) {
+    annotationDialogError.value = error instanceof Error ? error.message : '保存标注失败'
+  } finally {
+    annotationSaving.value = false
+  }
+}
+
+async function deleteAnnotation(): Promise<void> {
+  if (!annotationTarget.value) return
+  annotationSaving.value = true
+  annotationDialogError.value = ''
+  try {
+    await deleteTradeDecisionOverrideAnnotation(annotationTarget.value.decision_id)
+    const next = new Set(manualAnnotationDecisionIds.value)
+    next.delete(annotationTarget.value.decision_id)
+    manualAnnotationDecisionIds.value = next
+    closeAnnotationDialog()
+    await loadBehaviorProfile()
+  } catch (error) {
+    annotationDialogError.value = error instanceof Error ? error.message : '删除标注失败'
+  } finally {
+    annotationSaving.value = false
+  }
+}
+
 function loadDecisionSecondaryPanels(): void {
   if (secondaryDecisionPanelsRequested.value) return
   secondaryDecisionPanelsRequested.value = true
   void loadQualitySummary()
   void loadOutcomeReplay()
+  void loadBacktest()
+  void loadAlignment()
+  void loadBehaviorProfile()
 }
 
 function activateDecisionWorkspace(): void {
@@ -472,6 +836,8 @@ const selectedTradePlanAssessment = computed(() => nestedRecord(selectedTradePla
 const selectedRiskGate = computed(() => riskGateFor(selectedDecision.value))
 const selectedUserInvestmentPolicy = computed<UserInvestmentPolicySummary | null>(() => selectedDecision.value?.user_investment_policy_summary || null)
 const selectedAiPolicyAssessment = computed<AiPolicyAssessment | null>(() => selectedDecision.value?.ai_policy_assessment || null)
+const selectedBehaviorProfileSummary = computed(() => selectedDecision.value?.behavior_profile_summary || null)
+const selectedPersonalBehaviorReminders = computed(() => selectedDecision.value?.personal_behavior_reminders || [])
 const hasSelectedAssetDebate = computed(() => Object.keys(selectedAssetDebate.value).length > 0)
 const hasSelectedTradePlan = computed(() => Object.keys(selectedTradePlan.value).length > 0)
 const hasSelectedRiskGate = computed(() => Object.keys(selectedRiskGate.value).length > 0)
@@ -982,6 +1348,42 @@ onBeforeUnmount(() => {
                   <ul><li v-for="item in asStringList(selectedAiPolicyAssessment.data_limitations, 4)" :key="item">{{ item }}</li></ul>
                 </div>
               </div>
+              <div class="advice-card behavior-reminder-card">
+                <div class="advice-card__head">
+                  <h4>个人行为提醒</h4>
+                  <Button
+                    type="button"
+                    size="small"
+                    severity="secondary"
+                    :label="hasAnnotationForDecision(selectedDecision.id) ? '编辑标注' : '标注本次执行/不执行原因'"
+                    @click="openDecisionAnnotationDialog(selectedDecision)"
+                  />
+                </div>
+                <template v-if="selectedBehaviorProfileSummary">
+                  <div class="source-row source-row--left">
+                    <Tag :value="`行为风险：${behaviorRiskLabel(selectedBehaviorProfileSummary.behavior_risk_level)}`" :class="behaviorRiskClass(selectedBehaviorProfileSummary.behavior_risk_level)" />
+                    <Tag
+                      v-for="pattern in selectedBehaviorProfileSummary.dominant_behavior_patterns.slice(0, 5)"
+                      :key="pattern"
+                      :value="behaviorTagLabel(pattern)"
+                      class="p-tag--accent"
+                    />
+                  </div>
+                  <ul v-if="selectedPersonalBehaviorReminders.length" class="behavior-reminder-list">
+                    <li v-for="item in selectedPersonalBehaviorReminders" :key="`${item.type}-${item.message}`">
+                      <Tag :value="item.severity || 'low'" :class="reminderSeverityClass(item.severity)" />
+                      <span>{{ item.message }}</span>
+                    </li>
+                  </ul>
+                  <p v-else class="policy-disclaimer">暂无需要特别提醒的历史行为模式，本次保持空提醒。</p>
+                  <p class="policy-disclaimer">这些提醒只用于复盘和执行纪律，不会自动改变 Agent 动作；estimated cost/value 是模型估算，不是真实账户 PnL；人工标注不会强制 Agent。</p>
+                  <div v-if="selectedBehaviorProfileSummary.data_limitations.length" class="detail-list">
+                    <span>数据限制</span>
+                    <ul><li v-for="item in selectedBehaviorProfileSummary.data_limitations.slice(0, 4)" :key="item">{{ item }}</li></ul>
+                  </div>
+                </template>
+                <p v-else class="policy-disclaimer">暂无行为画像上下文，个人行为提醒暂不生成。</p>
+              </div>
               <div class="advice-card">
                 <h4>仓位建议</h4>
                 <span>当前仓位：{{ formatPct(selectedDecision.position_advice.current_position_pct) }}</span>
@@ -1171,6 +1573,105 @@ onBeforeUnmount(() => {
           :evidence-summary="selectedDecision.evidence_summary"
           :run-trace-summary="selectedDecision.run_trace_summary"
         />
+      </section>
+
+      <section v-if="activeWorkspace === 'decision'" class="surface-panel quality-dashboard behavior-profile-panel">
+        <div class="surface-panel__content">
+          <div class="section-header">
+            <div>
+              <h3 class="panel-title">交易行为画像</h3>
+              <p class="panel-subtitle">用于复盘你的执行偏差和 override 原因；估算成本/价值不是真实 PnL，人工标注也不会强制覆盖 Agent 决策。</p>
+            </div>
+            <Tag v-if="behaviorProfileLoading" value="LOADING" class="p-tag--accent" />
+            <Tag v-else-if="behaviorProfileError" value="加载失败" class="p-tag--warning" />
+            <Tag v-else-if="behaviorProfileSummary" :value="`风险 ${behaviorRiskLabel(behaviorProfileSummary.behavior_risk_level)}`" :class="behaviorRiskClass(behaviorProfileSummary.behavior_risk_level)" />
+          </div>
+
+          <ErrorBlock v-if="behaviorProfileError" :message="behaviorProfileError" />
+          <LoadingBlock v-else-if="behaviorProfileLoading && !behaviorProfile" />
+          <div v-else-if="behaviorProfile && behaviorProfileSummary" class="quality-dashboard__body">
+            <div class="quality-dashboard-grid">
+              <div class="quality-metric-card">
+                <span>跟随率</span>
+                <strong>{{ formatPct(behaviorProfileSummary.alignment_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>手动 override 率</span>
+                <strong>{{ formatPct(behaviorProfileSummary.manual_override_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>忽略加仓率</span>
+                <strong>{{ formatPct(behaviorProfileSummary.ignored_add_signal_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>坏 override 率</span>
+                <strong>{{ formatPct(behaviorProfileSummary.bad_override_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>行为净值估算</span>
+                <strong>{{ formatMoney(behaviorProfileSummary.net_behavior_value) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>行为风险</span>
+                <strong>{{ behaviorRiskLabel(behaviorProfileSummary.behavior_risk_level) }}</strong>
+              </div>
+            </div>
+
+            <div class="quality-dashboard-grid quality-dashboard-grid--secondary">
+              <div class="quality-top-list">
+                <h4>主要行为模式</h4>
+                <ul v-if="behaviorProfileSummary.dominant_behavior_patterns.length">
+                  <li v-for="item in behaviorProfileSummary.dominant_behavior_patterns.slice(0, 5)" :key="item.pattern">
+                    <span>{{ behaviorTagLabel(item.pattern) }} · {{ item.description }}</span>
+                    <strong>{{ item.count }} / {{ formatMoney(item.estimated_cost) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无明显重复偏差。</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>Override 原因分布</h4>
+                <ul v-if="behaviorProfileSummary.top_reason_categories.length">
+                  <li v-for="item in behaviorProfileSummary.top_reason_categories" :key="item.key">
+                    <span>{{ reasonCategoryLabel(item.key) }}</span>
+                    <strong>{{ item.count }}</strong>
+                  </li>
+                </ul>
+                <p v-else>还没有人工标注原因。</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>标的偏差</h4>
+                <ul v-if="behaviorProfileSummary.top_symbols_with_bias.length">
+                  <li v-for="item in behaviorProfileSummary.top_symbols_with_bias.slice(0, 5)" :key="item.key">
+                    <span>{{ item.key }} · {{ (item.top_tags || []).map((tag) => behaviorTagLabel(tag.key)).join(' / ') }}</span>
+                    <strong>{{ item.count }} / {{ formatMoney(item.estimated_cost) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无明显标的偏差。</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>下次提醒</h4>
+                <ul v-if="behaviorReminderHints.length">
+                  <li v-for="item in behaviorReminderHints" :key="`${item.annotation_decision_id}-${item.message}`">
+                    <span>{{ item.symbols.join(', ') || '全局' }} · {{ item.message }}</span>
+                    <strong>{{ behaviorTagLabel(item.pattern) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无需要下次提醒的经验教训。</p>
+              </div>
+            </div>
+
+            <div v-if="behaviorProfileSummary.dominant_behavior_patterns.length" class="behavior-insight-list">
+              <div v-for="item in behaviorProfileSummary.dominant_behavior_patterns.slice(0, 4)" :key="`hint-${item.pattern}`" class="holding-hint">
+                <Tag :value="item.severity.toUpperCase()" :class="item.severity === 'high' ? 'p-tag--negative' : 'p-tag--warning'" />
+                <span>{{ item.suggestion }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无行为画像数据。</div>
+        </div>
       </section>
 
       <section v-if="activeWorkspace === 'decision'" class="surface-panel quality-dashboard">
@@ -1441,7 +1942,398 @@ onBeforeUnmount(() => {
           <div v-else class="empty-state">暂无可回放的交易决策或价格数据。</div>
         </div>
       </section>
+
+      <section v-if="activeWorkspace === 'decision'" class="surface-panel quality-dashboard">
+        <div class="surface-panel__content">
+          <div class="section-header">
+            <div>
+              <h3 class="panel-title">虚拟组合回测</h3>
+              <p class="panel-subtitle">假设按 final_action 用虚拟资金执行，不影响真实 IBKR 账户；默认 next close 成交，交易成本为估算。</p>
+            </div>
+            <Tag v-if="backtestLoading" value="LOADING" class="p-tag--accent" />
+            <Tag v-else-if="backtestError" value="加载失败" class="p-tag--warning" />
+            <Tag v-else-if="backtestSummary" :value="`${backtestSummary.trade_count} 笔虚拟交易`" class="p-tag--accent" />
+          </div>
+
+          <div class="backtest-controls">
+            <label>
+              <span>回看天数</span>
+              <input v-model.number="backtestForm.days" type="number" min="1" max="3650" />
+            </label>
+            <label>
+              <span>初始资金</span>
+              <input v-model.number="backtestForm.initial_cash" type="number" min="1000" step="1000" />
+            </label>
+            <label>
+              <span>Benchmark</span>
+              <input v-model="backtestForm.benchmark_symbol" type="text" />
+            </label>
+            <label>
+              <span>成交时点</span>
+              <select v-model="backtestForm.execution_timing">
+                <option value="next_close">次日收盘</option>
+                <option value="same_close">当日收盘</option>
+                <option value="next_open">次日开盘</option>
+              </select>
+            </label>
+            <label class="backtest-controls__check">
+              <input v-model="backtestForm.include_costs" type="checkbox" />
+              <span>包含交易成本</span>
+            </label>
+            <Button label="运行回测" size="small" :loading="backtestLoading" @click="loadBacktest" />
+          </div>
+
+          <ErrorBlock v-if="backtestError" :message="backtestError" />
+          <LoadingBlock v-else-if="backtestLoading && !backtest" />
+          <div v-else-if="backtest && backtestSummary" class="quality-dashboard__body">
+            <div class="quality-dashboard-grid">
+              <div class="quality-metric-card">
+                <span>总收益</span>
+                <strong>{{ formatSignedPct(backtestSummary.total_return) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>年化收益</span>
+                <strong>{{ formatSignedPct(backtestSummary.annualized_return) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>最大回撤</span>
+                <strong>{{ formatSignedPct(backtestSummary.max_drawdown) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>Sharpe</span>
+                <strong>{{ backtestSummary.sharpe_ratio ?? '--' }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>胜率</span>
+                <strong>{{ formatPct(backtestSummary.win_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>交易次数</span>
+                <strong>{{ backtestSummary.trade_count }}<small> 笔</small></strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>换手率</span>
+                <strong>{{ formatPct(backtestSummary.turnover) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>超额收益</span>
+                <strong>{{ formatSignedPct(backtestSummary.excess_return) }}</strong>
+              </div>
+            </div>
+
+            <div class="backtest-chart">
+              <div class="backtest-chart__head">
+                <h4>权益曲线预览</h4>
+                <span>{{ backtestSummary.start_date }} - {{ backtestSummary.end_date }} · {{ executionTimingLabel(String(backtest.params.execution_timing || '')) }}</span>
+              </div>
+              <div class="backtest-sparkline">
+                <div
+                  v-for="point in backtestCurvePreview"
+                  :key="point.date"
+                  class="backtest-sparkline__bar"
+                  :style="{ height: curvePointHeight(point.cumulative_return) }"
+                  :title="`${point.date} ${formatSignedPct(point.cumulative_return)}`"
+                />
+              </div>
+            </div>
+
+            <div class="quality-dashboard-grid quality-dashboard-grid--secondary">
+              <div class="quality-top-list">
+                <h4>最终持仓</h4>
+                <ul v-if="backtest.positions.length">
+                  <li v-for="item in backtest.positions" :key="item.symbol">
+                    <span>{{ item.symbol }} · {{ formatPct(item.weight) }}</span>
+                    <strong>{{ formatMoney(item.market_value) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>期末无虚拟持仓</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>Symbol Contribution</h4>
+                <ul v-if="backtest.symbol_contributions.length">
+                  <li v-for="item in backtest.symbol_contributions.slice(0, 8)" :key="item.key">
+                    <span>{{ item.key }} · {{ item.trade_count }} 笔</span>
+                    <strong>{{ formatMoney(item.contribution_pnl) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无贡献统计</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>Action Stats</h4>
+                <ul v-if="backtest.action_stats.length">
+                  <li v-for="item in backtest.action_stats.slice(0, 8)" :key="item.key">
+                    <span>{{ statKeyLabel(item.key) }} · 胜率 {{ formatPct(item.win_rate) }}</span>
+                    <strong>{{ formatMoney(item.contribution_pnl) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无动作统计</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>估算诊断</h4>
+                <ul>
+                  <li><span>校准成功 PnL</span><strong>{{ formatMoney(backtestSummary.calibrated_action_success_pnl) }}</strong></li>
+                  <li><span>错过 AI 加仓成本</span><strong>{{ formatMoney(backtestSummary.missed_ai_add_opportunity_estimated_cost) }}</strong></li>
+                  <li><span>Risk Gate 避险价值</span><strong>{{ formatMoney(backtestSummary.risk_gate_avoided_loss_estimated_value) }}</strong></li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="outcome-table backtest-trade-table">
+              <h4>虚拟交易明细</h4>
+              <div class="outcome-table__header backtest-trade-table__header">
+                <span>日期</span>
+                <span>标的</span>
+                <span>动作</span>
+                <span>方向</span>
+                <span>价格</span>
+                <span>金额</span>
+                <span>成本</span>
+                <span>原因</span>
+              </div>
+              <div
+                v-for="item in backtest.trades.slice(0, 20)"
+                :key="`${item.decision_id}-${item.execution_date}-${item.side}`"
+                class="outcome-table__row backtest-trade-table__row"
+              >
+                <span>{{ item.execution_date || item.decision_date || '--' }}</span>
+                <strong>{{ item.symbol }}</strong>
+                <span>{{ actionLabel(item.final_action) }}</span>
+                <Tag :value="tradeSideLabel(item.side)" :class="item.side === 'buy' ? 'p-tag--positive' : item.side === 'sell' ? 'p-tag--warning' : 'p-tag--accent'" />
+                <span>{{ formatNumber(item.execution_price) }}</span>
+                <span>{{ formatMoney(item.notional) }}</span>
+                <span>{{ formatMoney(item.commission) }}</span>
+                <span>{{ item.reason }}</span>
+              </div>
+            </div>
+
+            <div v-if="backtest.data_limitations.length" class="holding-hint holding-hint--warning">
+              <Tag value="回测说明" class="p-tag--warning" />
+              <span>{{ backtest.data_limitations.join(' · ') }}</span>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无可运行的虚拟组合回测数据。</div>
+        </div>
+      </section>
+
+      <section v-if="activeWorkspace === 'decision'" class="surface-panel quality-dashboard">
+        <div class="surface-panel__content">
+          <div class="section-header">
+            <div>
+              <h3 class="panel-title">真实执行对齐</h3>
+              <p class="panel-subtitle">对齐 Agent 建议、IBKR 真实交易和 Shadow Backtest，估算行为偏差，不代表真实账户 PnL。</p>
+            </div>
+            <Tag v-if="alignmentLoading" value="LOADING" class="p-tag--accent" />
+            <Tag v-else-if="alignmentError" value="加载失败" class="p-tag--warning" />
+            <Tag v-else-if="alignmentSummary" :value="`${alignmentSummary.evaluated_decisions}/${alignmentSummary.total_decisions} 已对齐`" class="p-tag--accent" />
+          </div>
+
+          <ErrorBlock v-if="alignmentError" :message="alignmentError" />
+          <LoadingBlock v-else-if="alignmentLoading && !alignment" />
+          <div v-else-if="alignment && alignmentSummary && alignmentSummary.total_decisions > 0" class="quality-dashboard__body">
+            <div class="quality-dashboard-grid">
+              <div class="quality-metric-card">
+                <span>跟随率</span>
+                <strong>{{ formatPct(alignmentSummary.alignment_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>反向率</span>
+                <strong>{{ formatPct(alignmentSummary.contradiction_rate) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>忽略加仓信号</span>
+                <strong>{{ alignmentSummary.ignored_add_signal_count }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>手动 override</span>
+                <strong>{{ alignmentSummary.manual_override_count }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>行为净值估算</span>
+                <strong>{{ formatMoney(alignmentSummary.net_behavior_value) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>错过机会估算</span>
+                <strong>{{ formatMoney(alignmentSummary.estimated_opportunity_cost_total) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>坏 override 成本</span>
+                <strong>{{ formatMoney(alignmentSummary.estimated_bad_override_cost_total) }}</strong>
+              </div>
+              <div class="quality-metric-card">
+                <span>平均延迟</span>
+                <strong>{{ alignmentSummary.avg_execution_delay_days ?? '--' }}<small> 天</small></strong>
+              </div>
+            </div>
+
+            <div class="quality-dashboard-grid quality-dashboard-grid--secondary">
+              <div class="quality-top-list">
+                <h4>三方对比</h4>
+                <ul>
+                  <li><span>Shadow Return</span><strong>{{ formatSignedPct(alignmentSummary.shadow_total_return) }}</strong></li>
+                  <li><span>Shadow Max DD</span><strong>{{ formatSignedPct(alignmentSummary.shadow_max_drawdown) }}</strong></li>
+                  <li><span>Shadow Sharpe</span><strong>{{ alignmentSummary.shadow_sharpe ?? '--' }}</strong></li>
+                  <li><span>真实账户估算</span><strong>{{ formatSignedPct(alignmentSummary.real_account_return_estimate) }}</strong></li>
+                  <li><span>行为差距估算</span><strong>{{ formatSignedPct(alignmentSummary.behavior_gap_estimate) }}</strong></li>
+                </ul>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>行为偏差分布</h4>
+                <ul v-if="topQualityItems(alignmentSummary.by_behavior_tag, 10).length">
+                  <li v-for="item in topQualityItems(alignmentSummary.by_behavior_tag, 10)" :key="item.key">
+                    <span>{{ behaviorTagLabel(item.key) }}</span>
+                    <strong>{{ item.count }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无行为偏差标签</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>Top 错过机会</h4>
+                <ul v-if="alignmentSummary.top_missed_opportunities.length">
+                  <li v-for="item in alignmentSummary.top_missed_opportunities" :key="item.decision_id">
+                    <span>{{ item.symbol }} · {{ actionLabel(item.final_action) }}</span>
+                    <strong>{{ formatMoney(item.estimated_opportunity_cost) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无明显错过机会</p>
+              </div>
+
+              <div class="quality-top-list">
+                <h4>Top Override</h4>
+                <ul v-if="alignmentSummary.top_bad_overrides.length || alignmentSummary.top_good_overrides.length">
+                  <li v-for="item in alignmentSummary.top_bad_overrides.slice(0, 3)" :key="`bad-${item.decision_id}`">
+                    <span>{{ item.symbol }} · 坏 override</span>
+                    <strong>{{ formatMoney(item.estimated_bad_override_cost) }}</strong>
+                  </li>
+                  <li v-for="item in alignmentSummary.top_good_overrides.slice(0, 3)" :key="`good-${item.decision_id}`">
+                    <span>{{ item.symbol }} · 好 override</span>
+                    <strong>{{ formatMoney(item.estimated_good_override_value) }}</strong>
+                  </li>
+                </ul>
+                <p v-else>暂无 override 样本</p>
+              </div>
+            </div>
+
+            <div class="outcome-table alignment-table">
+              <h4>执行对齐明细</h4>
+              <div class="outcome-table__header alignment-table__header">
+                <span>日期</span>
+                <span>标的</span>
+                <span>Agent 动作</span>
+                <span>真实动作</span>
+                <span>对齐</span>
+                <span>标签</span>
+                <span>20D</span>
+                <span>估算影响</span>
+                <span>标注</span>
+              </div>
+              <div
+                v-for="item in alignmentItems"
+                :key="item.decision_id"
+                role="button"
+                tabindex="0"
+                class="outcome-table__row alignment-table__row"
+                @click="selectDecisionById(item.decision_id)"
+              >
+                <span>{{ item.decision_date || '--' }}</span>
+                <strong>{{ item.symbol }}</strong>
+                <span>{{ actionLabel(item.final_action) }}</span>
+                <span>{{ tradeSideLabel(item.real_trade_side) }} · {{ item.real_trade_count }} 笔</span>
+                <Tag :value="alignmentLabel(item.alignment_label)" :class="alignmentClass(item.alignment_label)" />
+                <span>{{ item.behavior_tags.map(behaviorTagLabel).join(' / ') || '--' }}</span>
+                <span>{{ formatSignedPct(item.return_20d) }}</span>
+                <span>{{ formatMoney(item.estimated_good_override_value + item.estimated_avoided_loss - item.estimated_opportunity_cost - item.estimated_bad_override_cost) }}</span>
+                <button type="button" class="annotation-link" @click.stop="openAnnotationDialog(item)">
+                  {{ hasAnnotationForDecision(item.decision_id) ? '编辑标注' : '标注原因' }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="alignmentSummary.data_limitations.length" class="holding-hint holding-hint--warning">
+              <Tag value="对齐说明" class="p-tag--warning" />
+              <span>{{ alignmentSummary.data_limitations.join(' · ') }}</span>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无可对齐的交易决策或真实交易数据。</div>
+        </div>
+      </section>
     </template>
+
+    <div v-if="annotationDialogVisible && annotationTarget" class="annotation-modal" role="dialog" aria-modal="true">
+      <div class="annotation-modal__backdrop" @click="closeAnnotationDialog"></div>
+      <form class="annotation-modal__panel" @submit.prevent="saveAnnotation">
+        <div class="section-header">
+          <div>
+            <h3 class="panel-title">{{ annotationTarget.symbol }} override 标注</h3>
+            <p class="panel-subtitle">{{ annotationTarget.decision_date || '--' }} · {{ alignmentLabel(annotationTarget.alignment_label) }} · 标注用于复盘，不会强制改变 Agent 决策。</p>
+          </div>
+          <button type="button" class="annotation-modal__close" @click="closeAnnotationDialog">×</button>
+        </div>
+
+        <ErrorBlock v-if="annotationDialogError" :message="annotationDialogError" />
+
+        <div class="annotation-form-grid">
+          <label>
+            <span>Override 类型</span>
+            <input v-model="annotationForm.override_type" type="text" maxlength="120" placeholder="manual_contrarian_buy" />
+          </label>
+          <label>
+            <span>原因分类</span>
+            <select v-model="annotationForm.reason_category">
+              <option value="emotion">情绪</option>
+              <option value="capital_constraint">资金限制</option>
+              <option value="external_information">外部信息</option>
+              <option value="disagree_with_agent">不同意 Agent</option>
+              <option value="risk_control">主动风控</option>
+              <option value="forgot">忘记执行</option>
+              <option value="execution_issue">执行问题</option>
+              <option value="tax_or_cashflow">税务/现金流</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label>
+            <span>信心</span>
+            <select v-model="annotationForm.confidence">
+              <option value="high">高</option>
+              <option value="medium">中</option>
+              <option value="low">低</option>
+            </select>
+          </label>
+          <label>
+            <span>标签（逗号分隔，最多 20 个）</span>
+            <input v-model="annotationForm.tags_text" type="text" placeholder="追涨, 情绪交易" />
+          </label>
+        </div>
+
+        <label class="annotation-field">
+          <span>当时原因</span>
+          <textarea v-model="annotationForm.reason_text" maxlength="2000" rows="4" placeholder="当时为什么没有执行 / 反向执行 / 部分执行？"></textarea>
+        </label>
+
+        <div class="annotation-checks">
+          <label><input v-model="annotationForm.was_intentional" type="checkbox" /> 有意识 override</label>
+          <label><input v-model="annotationForm.was_emotional" type="checkbox" /> 有情绪因素</label>
+          <label><input v-model="annotationForm.should_remind_next_time" type="checkbox" /> 下次提醒我</label>
+        </div>
+
+        <label class="annotation-field">
+          <span>经验教训 / 下次提醒</span>
+          <textarea v-model="annotationForm.lesson" maxlength="2000" rows="3" placeholder="例如：不能只因为盘前上涨就追买。"></textarea>
+        </label>
+
+        <p class="policy-disclaimer">行为画像用于复盘；estimated cost/value 是模型估算，不是真实账户 PnL；人工标注帮助未来复盘，不会自动下单或强制覆盖 Agent。</p>
+
+        <div class="annotation-modal__actions">
+          <Button v-if="hasAnnotationForDecision(annotationTarget.decision_id)" type="button" label="删除标注" severity="secondary" :disabled="annotationSaving" @click="deleteAnnotation" />
+          <Button type="button" label="取消" severity="secondary" :disabled="annotationSaving" @click="closeAnnotationDialog" />
+          <Button type="submit" :label="annotationSaving ? '保存中…' : '保存标注'" :disabled="annotationSaving" />
+        </div>
+      </form>
+    </div>
   </section>
 </template>
 
@@ -1470,6 +2362,10 @@ onBeforeUnmount(() => {
   align-content: flex-start;
 }
 
+.source-row--left {
+  justify-content: flex-start;
+}
+
 .holding-hint {
   display: flex;
   align-items: center;
@@ -1493,6 +2389,33 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(129, 160, 207, 0.12);
   border-radius: var(--radius-md);
   background: rgba(10, 18, 32, 0.58);
+}
+
+.advice-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.behavior-reminder-card {
+  gap: 12px;
+}
+
+.behavior-reminder-list {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.behavior-reminder-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: var(--color-text-secondary);
 }
 
 .decision-list small,
@@ -1988,6 +2911,204 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
 }
 
+.backtest-controls {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid rgba(129, 160, 207, 0.14);
+  border-radius: var(--radius-md);
+  background: rgba(10, 18, 32, 0.48);
+}
+
+.backtest-controls label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.backtest-controls input,
+.backtest-controls select {
+  width: 100%;
+  border: 1px solid rgba(129, 160, 207, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  background: rgba(8, 15, 28, 0.9);
+}
+
+.backtest-controls__check {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.backtest-controls__check input {
+  width: auto;
+}
+
+.backtest-chart {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(129, 160, 207, 0.14);
+  border-radius: var(--radius-md);
+  background: rgba(10, 18, 32, 0.5);
+}
+
+.backtest-chart__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-secondary);
+}
+
+.backtest-chart__head h4 {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.backtest-sparkline {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  align-items: end;
+  gap: 6px;
+  height: 120px;
+}
+
+.backtest-sparkline__bar {
+  min-height: 4px;
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg, rgba(86, 213, 255, 0.95), rgba(55, 125, 255, 0.45));
+}
+
+.backtest-trade-table__header,
+.backtest-trade-table__row {
+  grid-template-columns: 1fr 0.8fr 1fr 0.8fr 0.8fr 0.9fr 0.8fr minmax(160px, 1.6fr);
+}
+
+.backtest-trade-table__row {
+  cursor: default;
+}
+
+.alignment-table__header,
+.alignment-table__row {
+  grid-template-columns: 1fr 0.8fr 1fr 1fr 0.9fr minmax(160px, 1.7fr) 0.7fr 1fr 0.9fr;
+}
+
+.behavior-insight-list {
+  display: grid;
+  gap: 10px;
+}
+
+.annotation-link {
+  justify-self: start;
+  border: 1px solid rgba(86, 213, 255, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  color: var(--color-accent-strong);
+  background: rgba(86, 213, 255, 0.08);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.annotation-link:hover {
+  border-color: rgba(86, 213, 255, 0.52);
+}
+
+.annotation-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.annotation-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 8, 18, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.annotation-modal__panel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-3);
+  width: min(760px, 100%);
+  max-height: min(86vh, 860px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(129, 160, 207, 0.2);
+  border-radius: var(--radius-md);
+  background: rgba(8, 15, 28, 0.98);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+.annotation-modal__close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(129, 160, 207, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: rgba(10, 18, 32, 0.72);
+  cursor: pointer;
+  font-size: 1.3rem;
+}
+
+.annotation-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.annotation-form-grid label,
+.annotation-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+}
+
+.annotation-form-grid input,
+.annotation-form-grid select,
+.annotation-field textarea {
+  width: 100%;
+  border: 1px solid rgba(129, 160, 207, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  color: var(--color-text-primary);
+  background: rgba(5, 10, 20, 0.9);
+}
+
+.annotation-field textarea {
+  resize: vertical;
+}
+
+.annotation-checks,
+.annotation-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.annotation-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+}
+
+.annotation-modal__actions {
+  justify-content: flex-end;
+}
+
 .quality-summary {
   display: grid;
   grid-template-columns: minmax(110px, 0.28fr) minmax(0, 1fr);
@@ -2233,6 +3354,9 @@ onBeforeUnmount(() => {
 
   .quality-dashboard-grid--secondary,
   .quality-trend-item,
+  .backtest-controls,
+  .backtest-trade-table__header,
+  .backtest-trade-table__row,
   .outcome-table__header,
   .outcome-table__row {
     grid-template-columns: 1fr;
@@ -2245,7 +3369,8 @@ onBeforeUnmount(() => {
   .insight-grid,
   .quality-grid,
   .quality-dashboard-grid,
-  .quality-summary {
+  .quality-summary,
+  .annotation-form-grid {
     grid-template-columns: 1fr;
   }
 

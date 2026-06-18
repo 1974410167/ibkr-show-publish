@@ -58,6 +58,21 @@ def make_service() -> tuple[InvestmentPolicyService, StubESClient]:
     return InvestmentPolicyService(repository), es
 
 
+def test_dependency_provider_direct_call_resolves_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api import deps
+
+    es = StubESClient()
+    monkeypatch.setattr(deps, "get_es_client", lambda: es)
+    monkeypatch.setattr(deps, "get_settings", lambda: DummySettings())
+
+    service = deps.get_investment_policy_service()
+    policy = service.get_policy_for_symbol("MSTR.US")
+
+    assert isinstance(service.repository, InvestmentPolicyRepository)
+    assert policy["source"] == "default_template"
+    assert policy["symbol"] == "MSTR"
+
+
 def test_global_policy_save_and_read() -> None:
     service, _es = make_service()
 

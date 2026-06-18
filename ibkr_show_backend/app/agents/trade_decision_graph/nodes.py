@@ -276,6 +276,90 @@ def make_load_user_investment_policy_node(deps):
     return load_user_investment_policy_node
 
 
+def _fallback_behavior_profile_context(symbol: str, reason: str) -> dict[str, Any]:
+    return {
+        "status": "fallback",
+        "lookback_days": 180,
+        "scope": "symbol" if symbol else "global",
+        "symbol": symbol,
+        "behavior_risk_level": "unknown",
+        "dominant_behavior_patterns": [],
+        "recent_lessons": [],
+        "coaching_hints": [],
+        "top_symbols_with_bias": [],
+        "net_behavior_value": None,
+        "reminder_enabled": False,
+        "data_limitations": [f"behavior_profile_unavailable: {reason[:160]}"],
+        "source": "behavior_profile_service",
+    }
+
+
+def make_load_behavior_profile_context_node(deps):
+    def load_behavior_profile_context_node(state: dict) -> dict:
+        trace = start_node_trace("load_behavior_profile_context")
+        symbol = state.get("normalized_symbol") or state.get("symbol") or ""
+        try:
+            service = getattr(deps, "behavior_profile_service", None)
+            if service is None:
+                raise RuntimeError("behavior_profile_service_unavailable")
+            context = service.get_recent_profile_context(days=180, symbol=symbol)
+            if not isinstance(context, dict):
+                raise RuntimeError("behavior_profile_context_invalid")
+            context = {
+                "status": context.get("status") or "available",
+                "lookback_days": int(context.get("lookback_days") or 180),
+                "scope": context.get("scope") or ("symbol" if symbol else "global"),
+                "symbol": context.get("symbol") or symbol,
+                "behavior_risk_level": context.get("behavior_risk_level") or "unknown",
+                "dominant_behavior_patterns": list(context.get("dominant_behavior_patterns") or [])[:5],
+                "recent_lessons": list(context.get("recent_lessons") or [])[:5],
+                "coaching_hints": list(context.get("coaching_hints") or [])[:5],
+                "top_symbols_with_bias": list(context.get("top_symbols_with_bias") or [])[:5],
+                "net_behavior_value": context.get("net_behavior_value"),
+                "reminder_enabled": bool(context.get("reminder_enabled")),
+                "data_limitations": list(context.get("data_limitations") or [])[:8],
+                "source": context.get("source") or "behavior_profile_service",
+            }
+            metadata = {
+                "hint_count": len(context["coaching_hints"]),
+                "pattern_count": len(context["dominant_behavior_patterns"]),
+                "lesson_count": len(context["recent_lessons"]),
+                "behavior_risk_level": context["behavior_risk_level"],
+                "status": context["status"],
+            }
+            trace = finish_node_trace(trace, "success", behavior_profile_metadata=metadata)
+            return {
+                "behavior_profile_context": context,
+                "behavior_profile_metadata": metadata,
+                "node_traces": [trace],
+            }
+        except Exception as exc:
+            reason = str(exc)[:200]
+            context = _fallback_behavior_profile_context(str(symbol), reason)
+            metadata = {
+                "hint_count": 0,
+                "pattern_count": 0,
+                "lesson_count": 0,
+                "behavior_risk_level": "unknown",
+                "status": "fallback",
+            }
+            trace = finish_node_trace(
+                trace,
+                "fallback",
+                fallback_used=True,
+                fallback_reason=reason,
+                behavior_profile_metadata=metadata,
+            )
+            return {
+                "behavior_profile_context": context,
+                "behavior_profile_metadata": metadata,
+                "data_limitations": context["data_limitations"],
+                "node_traces": [trace],
+            }
+
+    return load_behavior_profile_context_node
+
+
 def make_account_fit_node(deps):
     def account_fit_node(state: dict) -> dict:
         trace = start_node_trace("account_fit")
@@ -744,6 +828,7 @@ def make_build_card_pack_node(deps):
                 data_quality_summary=overall_quality,
                 subagent_traces=subagent_traces,
                 user_investment_policy=state.get("user_investment_policy"),
+                behavior_profile_context=state.get("behavior_profile_context"),
             )
 
             result: dict[str, Any] = {

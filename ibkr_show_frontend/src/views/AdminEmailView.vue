@@ -39,6 +39,9 @@ const form = reactive({
   daily_snapshot_email_enabled: false,
   daily_snapshot_email_to: '',
   daily_snapshot_subject_prefix: 'IBKR Daily Snapshot',
+  portfolio_action_alerts_email_enabled: false,
+  portfolio_action_alerts_email_to: '',
+  portfolio_action_alerts_subject_prefix: 'IBKR交易行动提醒',
 })
 
 const passwordPlaceholder = computed(() =>
@@ -67,6 +70,9 @@ function applySettings(value: EmailSettings): void {
   form.daily_snapshot_email_enabled = value.daily_snapshot_email_enabled
   form.daily_snapshot_email_to = value.daily_snapshot_email_to
   form.daily_snapshot_subject_prefix = value.daily_snapshot_subject_prefix
+  form.portfolio_action_alerts_email_enabled = value.portfolio_action_alerts_email_enabled
+  form.portfolio_action_alerts_email_to = value.portfolio_action_alerts_email_to
+  form.portfolio_action_alerts_subject_prefix = value.portfolio_action_alerts_subject_prefix
 }
 
 function normalizeTls(mode: 'ssl' | 'starttls'): void {
@@ -111,6 +117,9 @@ async function saveSettings(): Promise<void> {
       daily_snapshot_email_enabled: form.daily_snapshot_email_enabled,
       daily_snapshot_email_to: form.daily_snapshot_email_to.trim(),
       daily_snapshot_subject_prefix: form.daily_snapshot_subject_prefix.trim(),
+      portfolio_action_alerts_email_enabled: form.portfolio_action_alerts_email_enabled,
+      portfolio_action_alerts_email_to: form.portfolio_action_alerts_email_to.trim(),
+      portfolio_action_alerts_subject_prefix: form.portfolio_action_alerts_subject_prefix.trim(),
     })
     applySettings(response.settings)
     noticeMessage.value = response.message
@@ -186,6 +195,7 @@ onMounted(() => {
           <div class="admin-email-page__tags">
             <Tag :value="settings?.daily_review_email_enabled ? 'DAILY REVIEW ON' : 'DAILY REVIEW OFF'" :class="settings?.daily_review_email_enabled ? 'p-tag--positive' : 'p-tag--secondary'" />
             <Tag :value="settings?.daily_snapshot_email_enabled ? 'GMAIL SNAPSHOT ON' : 'GMAIL SNAPSHOT OFF'" :class="settings?.daily_snapshot_email_enabled ? 'p-tag--positive' : 'p-tag--secondary'" />
+            <Tag :value="settings?.portfolio_action_alerts_email_enabled ? 'ACTION ALERTS ON' : 'ACTION ALERTS OFF'" :class="settings?.portfolio_action_alerts_email_enabled ? 'p-tag--positive' : 'p-tag--secondary'" />
           </div>
         </div>
 
@@ -271,6 +281,37 @@ onMounted(() => {
                   <dd>{{ settings?.config_file || '--' }}</dd>
                 </div>
               </dl>
+            </form>
+          </div>
+        </section>
+
+        <section class="surface-panel">
+          <div class="surface-panel__content">
+            <div class="section-header">
+              <div>
+                <h3 class="panel-title">交易行动提醒邮件</h3>
+                <p class="panel-subtitle">只发送 Portfolio Manager 生成的具体股票加仓、建仓、减仓或风险复核提醒；不会发送任务成功/失败、price history pending 或工程告警。</p>
+              </div>
+              <label class="check-row">
+                <input v-model="form.portfolio_action_alerts_email_enabled" type="checkbox" />
+                <span>启用</span>
+              </label>
+            </div>
+
+            <form class="email-settings-form" @submit.prevent="saveSettings">
+              <div class="email-form-grid">
+                <label class="field-stack">
+                  <span class="field-stack__label">收件人</span>
+                  <InputText v-model="form.portfolio_action_alerts_email_to" placeholder="me@example.com, other@example.com" />
+                </label>
+                <label class="field-stack">
+                  <span class="field-stack__label">Subject Prefix</span>
+                  <InputText v-model="form.portfolio_action_alerts_subject_prefix" />
+                </label>
+              </div>
+              <p class="email-hint">
+                邮件正文会明确 not an order，需要人工确认。未开启时系统仍可生成 Action Alert 记录，但不会发送邮件。
+              </p>
             </form>
           </div>
         </section>
@@ -389,6 +430,10 @@ onMounted(() => {
               <div class="result-card">
                 <span class="terminal-note">Gmail 快照收件人</span>
                 <strong>{{ settings?.daily_snapshot_email_to || '--' }}</strong>
+              </div>
+              <div class="result-card">
+                <span class="terminal-note">交易行动提醒收件人</span>
+                <strong>{{ settings?.portfolio_action_alerts_email_to || '--' }}</strong>
               </div>
               <div class="result-card">
                 <span class="terminal-note">SMTP</span>

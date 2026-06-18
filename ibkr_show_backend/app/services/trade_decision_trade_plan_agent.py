@@ -144,6 +144,7 @@ class TradeDecisionTradePlanAgent:
             "decision_type": card_pack.decision_type,
             "asset_debate": _compact_value(_card_dict(debate_judge_card) or {}),
             "ai_policy_assessment": _compact_value(card_pack.ai_policy_assessment or {}),
+            "behavior_profile_context": _compact_value(card_pack.behavior_profile_context or {}),
             "account": _compact_value(account),
             "evidence_cards": {
                 "account_fit_card": _compact_card(card_pack.account_fit_card),
@@ -540,6 +541,7 @@ TRADE_PLAN_PROMPT = """你是交易计划 Agent。你的任务是把“标的级
 2. 账户动作 portfolio_action: 建仓、加仓、持有、持有不加仓、减仓、清仓、等待、观察、回避
 3. 动作原因 action_reason_type: asset_view | asset_view_and_account_fit | portfolio_risk_constraint | insufficient_data | event_risk_window | thesis_broken | panic_blocked | no_action
 4. AI 仓位评估 ai_policy_assessment: 这是 AI 独立仓位建议，不是用户偏好；若 status=evaluated，max_position_pct 和 target_position_pct 应优先参考它。
+5. 行为画像 behavior_profile_context: 这是用户历史执行偏差上下文，只能用于 execution reminder，不是交易规则。
 
 禁止：
 - 编造账户数据、行情、财报、新闻、宏观事件
@@ -552,6 +554,9 @@ TRADE_PLAN_PROMPT = """你是交易计划 Agent。你的任务是把“标的级
 - ai_policy_assessment.status=evaluated 时，目标仓位超过 ai_recommended_max_position_pct
 - ai_policy_assessment.recommended_action_bias=hold_no_add/avoid/prefer_reduce 时仍输出激进加仓
 - ai_policy_assessment 显示 underweight/no_position 且 allow_add/prefer_pullback_add 时，无明确阻断原因却输出 hold/watchlist
+- 因为用户历史 ignored_add_signal / under_sized_execution 就提高 target_position_pct 或 max_position_pct
+- 因为用户历史 premature_trim 就禁止减仓
+- 因为 behavior_profile_context 直接改变 portfolio_action
 - asset_stance=bearish 且已有持仓时建议加仓
 - asset_stance=insufficient_data 时给出强方向动作
 
@@ -564,6 +569,7 @@ TRADE_PLAN_PROMPT = """你是交易计划 Agent。你的任务是把“标的级
 - 如果输出 hold_no_add，summary 或 risk_reward_assessment.sanitization_notes 必须说明明确阻断原因
 - 如果输出 watchlist，summary 必须说明缺少哪些条件才能变成 add_small
 - 不得绕过 Risk Gate；你的输出是 draft action，最终动作仍由 Risk Gate 校验
+- 行为画像只允许在 summary 或 risk_reward_assessment.sanitization_notes 中提醒执行纪律；不得改变仓位、动作或 Risk Gate 约束
 
 动作映射：
 - add_small：证据支持小幅提高仓位，适合 underweight 且风险收益合格但不需要追涨。

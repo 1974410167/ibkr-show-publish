@@ -17,6 +17,7 @@ from app.schemas.admin_email import EmailSettingsResponse, EmailSettingsUpdateRe
 
 DEFAULT_DAILY_REVIEW_PREFIX = "IBKR每日持仓复盘"
 DEFAULT_DAILY_SNAPSHOT_PREFIX = "IBKR Daily Snapshot"
+DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX = "IBKR交易行动提醒"
 MASKED_PASSWORD_MARKER = "****"
 DEFAULT_TEST_SUBJECT = "IBKR Show 邮件发送测试"
 DEFAULT_TEST_MESSAGE = "如果你收到这封邮件，说明 IBKR Show 邮件配置成功。"
@@ -57,6 +58,10 @@ class EmailConfig:
     daily_snapshot_email_enabled: bool = False
     daily_snapshot_email_to: str = ""
     daily_snapshot_subject_prefix: str = DEFAULT_DAILY_SNAPSHOT_PREFIX
+
+    portfolio_action_alerts_email_enabled: bool = False
+    portfolio_action_alerts_email_to: str = ""
+    portfolio_action_alerts_subject_prefix: str = DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX
 
 
 def utc_now_iso() -> str:
@@ -193,9 +198,12 @@ class EmailConfigStore:
             daily_snapshot_email_enabled=bool(payload.get("daily_snapshot_email_enabled", False)),
             daily_snapshot_email_to=str(payload.get("daily_snapshot_email_to") or ""),
             daily_snapshot_subject_prefix=str(payload.get("daily_snapshot_subject_prefix") or DEFAULT_DAILY_SNAPSHOT_PREFIX),
+            portfolio_action_alerts_email_enabled=bool(payload.get("portfolio_action_alerts_email_enabled", False)),
+            portfolio_action_alerts_email_to=str(payload.get("portfolio_action_alerts_email_to") or ""),
+            portfolio_action_alerts_subject_prefix=str(payload.get("portfolio_action_alerts_subject_prefix") or DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX),
         )
 
-        if not cfg.daily_review_email_enabled and not cfg.daily_snapshot_email_enabled:
+        if not cfg.daily_review_email_enabled and not cfg.daily_snapshot_email_enabled and not cfg.portfolio_action_alerts_email_enabled:
             if payload.get("enabled"):
                 cfg.daily_review_email_enabled = True
 
@@ -249,9 +257,12 @@ class EmailService:
             daily_snapshot_email_enabled=bool(payload.daily_snapshot_email_enabled),
             daily_snapshot_email_to=", ".join(parse_email_recipients(payload.daily_snapshot_email_to)),
             daily_snapshot_subject_prefix=(payload.daily_snapshot_subject_prefix or DEFAULT_DAILY_SNAPSHOT_PREFIX).strip() or DEFAULT_DAILY_SNAPSHOT_PREFIX,
+            portfolio_action_alerts_email_enabled=bool(payload.portfolio_action_alerts_email_enabled),
+            portfolio_action_alerts_email_to=", ".join(parse_email_recipients(payload.portfolio_action_alerts_email_to)),
+            portfolio_action_alerts_subject_prefix=(payload.portfolio_action_alerts_subject_prefix or DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX).strip() or DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX,
         )
 
-        smtp_enabled = config.daily_review_email_enabled or config.daily_snapshot_email_enabled
+        smtp_enabled = config.daily_review_email_enabled or config.daily_snapshot_email_enabled or config.portfolio_action_alerts_email_enabled
         self._validate_config(config, require_enabled_fields=bool(smtp_enabled))
         self.store.save(config)
         return self._to_public_settings(config)
@@ -283,6 +294,19 @@ class EmailService:
         recipients = parse_email_recipients(config.daily_snapshot_email_to)
         subject, html_body, text_body, attachments = self.build_daily_account_snapshot_message(config, snapshot)
         self._send(config, subject=subject, html_body=html_body, text_body=text_body, recipients=recipients, attachments=attachments)
+        return True
+
+    def portfolio_action_alerts_subject_prefix(self) -> str:
+        config = self._effective_config()
+        return config.portfolio_action_alerts_subject_prefix or DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX
+
+    def send_portfolio_action_alerts(self, alerts: list[dict], *, subject: str, html_body: str, text_body: str) -> bool:
+        config = self._effective_config()
+        if not config.portfolio_action_alerts_email_enabled:
+            return False
+        self._validate_config(config, require_enabled_fields=True)
+        recipients = parse_email_recipients(config.portfolio_action_alerts_email_to)
+        self._send(config, subject=subject, html_body=html_body, text_body=text_body, recipients=recipients)
         return True
 
     def build_daily_account_snapshot_message(
@@ -788,6 +812,7 @@ class EmailService:
     def _effective_config(self) -> EmailConfig:
         env_enabled = _read_bool_env("DAILY_REVIEW_EMAIL_ENABLE", False)
         env_snapshot_enabled = _read_bool_env("DAILY_SNAPSHOT_EMAIL_ENABLE", False)
+        env_action_alerts_enabled = _read_bool_env("PORTFOLIO_ACTION_ALERTS_EMAIL_ENABLE", False)
 
         if self.store.exists():
             return self.store.read()
@@ -807,6 +832,9 @@ class EmailService:
             daily_snapshot_email_enabled=env_snapshot_enabled,
             daily_snapshot_email_to=os.getenv("DAILY_SNAPSHOT_EMAIL_TO", ""),
             daily_snapshot_subject_prefix=os.getenv("DAILY_SNAPSHOT_EMAIL_SUBJECT_PREFIX", DEFAULT_DAILY_SNAPSHOT_PREFIX) or DEFAULT_DAILY_SNAPSHOT_PREFIX,
+            portfolio_action_alerts_email_enabled=env_action_alerts_enabled,
+            portfolio_action_alerts_email_to=os.getenv("PORTFOLIO_ACTION_ALERTS_EMAIL_TO", ""),
+            portfolio_action_alerts_subject_prefix=os.getenv("PORTFOLIO_ACTION_ALERTS_SUBJECT_PREFIX", DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX) or DEFAULT_PORTFOLIO_ACTION_ALERTS_PREFIX,
         )
 
     def _validate_config(self, config: EmailConfig, *, require_enabled_fields: bool) -> None:
@@ -838,9 +866,14 @@ class EmailService:
         if config.daily_snapshot_email_enabled and config.daily_snapshot_email_to.strip():
             parse_email_recipients(config.daily_snapshot_email_to)
 
+        if config.portfolio_action_alerts_email_enabled and not config.portfolio_action_alerts_email_to.strip():
+            raise EmailConfigError("启用交易行动提醒邮件时必须填写收件人 (portfolio_action_alerts_email_to)")
+        if config.portfolio_action_alerts_email_enabled and config.portfolio_action_alerts_email_to.strip():
+            parse_email_recipients(config.portfolio_action_alerts_email_to)
+
     def _to_public_settings(self, config: EmailConfig) -> EmailSettingsResponse:
         return EmailSettingsResponse(
-            enabled=config.daily_review_email_enabled or config.daily_snapshot_email_enabled,
+            enabled=config.daily_review_email_enabled or config.daily_snapshot_email_enabled or config.portfolio_action_alerts_email_enabled,
             smtp_host=config.smtp_host,
             smtp_port=config.smtp_port,
             smtp_username=config.smtp_username,
@@ -859,6 +892,9 @@ class EmailService:
             daily_snapshot_email_enabled=config.daily_snapshot_email_enabled,
             daily_snapshot_email_to=config.daily_snapshot_email_to,
             daily_snapshot_subject_prefix=config.daily_snapshot_subject_prefix,
+            portfolio_action_alerts_email_enabled=config.portfolio_action_alerts_email_enabled,
+            portfolio_action_alerts_email_to=config.portfolio_action_alerts_email_to,
+            portfolio_action_alerts_subject_prefix=config.portfolio_action_alerts_subject_prefix,
         )
 
     def _ranking_items(self, rankings: dict[str, Any], ranking_keys: tuple[str, ...], fallback: Any) -> list[dict[str, Any]]:

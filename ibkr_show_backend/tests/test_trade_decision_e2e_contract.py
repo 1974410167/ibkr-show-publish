@@ -1,8 +1,11 @@
 from fastapi import BackgroundTasks
+from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
+from app.api.deps import get_trade_decision_repository, require_authenticated_session
 from app.api.routes.trade_decision_agent import _public_decision
 from app.api.routes import trade_decision_agent as route_module
+from app.main import app
 from app.schemas.trade_decision import TradeDecisionHealthResponse, TradeDecisionResult
 from app.schemas.trade_decision import TradeDecisionAnalyzeAutoRequest, TradeDecisionAnalyzeEntryRequest, TradeDecisionAnalyzeHoldingRequest
 
@@ -102,6 +105,102 @@ def test_public_decision_exposes_trade_plan_blocks_and_defaults_old_documents() 
     assert old.trade_plan == {}
     assert old.risk_gate == {}
     assert old.decision_quality == {}
+
+
+def test_public_decision_exposes_behavior_profile_fields_and_defaults_old_documents() -> None:
+    base = {
+        "id": "decision-1",
+        "decision_type": "trade_decision",
+        "symbol": "AMD.US",
+        "overall_score": 60,
+        "rating": "neutral",
+        "action": "watchlist",
+        "confidence": "medium",
+        "decision_summary": "ok",
+        "score_detail": {},
+        "position_advice": {"position_size_label": "none"},
+        "execution_plan": {"should_act_now": False},
+        "created_at": "2026-05-20T00:00:00+00:00",
+        "updated_at": "2026-05-20T00:00:00+00:00",
+    }
+
+    enriched = _public_decision({
+        **base,
+        "behavior_profile_summary": {
+            "status": "available",
+            "behavior_risk_level": "medium",
+            "dominant_behavior_patterns": ["ignored_add_signal"],
+            "reminder_enabled": True,
+            "data_limitations": [],
+        },
+        "personal_behavior_reminders": [
+            {
+                "type": "ignored_add_signal",
+                "severity": "medium",
+                "message": "曾多次忽略加仓信号，本次执行前复核是否又在拖延。",
+                "related_action": "add_small",
+                "source": "behavior_profile",
+            }
+        ],
+    })
+    old = _public_decision(base)
+
+    assert enriched.behavior_profile_summary["behavior_risk_level"] == "medium"
+    assert enriched.personal_behavior_reminders[0]["type"] == "ignored_add_signal"
+    assert old.behavior_profile_summary is None
+    assert old.personal_behavior_reminders == []
+
+
+def test_recent_and_detail_api_expose_behavior_profile_fields() -> None:
+    document = {
+        "id": "decision-1",
+        "decision_type": "trade_decision",
+        "symbol": "AMD.US",
+        "overall_score": 60,
+        "rating": "neutral",
+        "action": "add_on_pullback",
+        "confidence": "medium",
+        "decision_summary": "ok",
+        "score_detail": {},
+        "position_advice": {"position_size_label": "small"},
+        "execution_plan": {"should_act_now": False},
+        "behavior_profile_summary": {
+            "status": "available",
+            "behavior_risk_level": "medium",
+            "dominant_behavior_patterns": ["ignored_add_signal"],
+            "reminder_enabled": True,
+            "data_limitations": [],
+        },
+        "personal_behavior_reminders": [
+            {
+                "type": "ignored_add_signal",
+                "severity": "medium",
+                "message": "record the skip reason",
+                "related_action": "add_on_pullback",
+                "source": "behavior_profile",
+            }
+        ],
+        "created_at": "2026-05-20T00:00:00+00:00",
+        "updated_at": "2026-05-20T00:00:00+00:00",
+    }
+
+    repository = MagicMock()
+    repository.list_recent_decisions.return_value = [document]
+    repository.get_decision.return_value = document
+    app.dependency_overrides[require_authenticated_session] = lambda: object()
+    app.dependency_overrides[get_trade_decision_repository] = lambda: repository
+    try:
+        client = TestClient(app)
+        recent = client.get("/api/agent/trade-decision/recent?limit=1")
+        detail = client.get("/api/agent/trade-decision/decision-1")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert recent.status_code == 200
+    assert detail.status_code == 200
+    assert recent.json()["items"][0]["behavior_profile_summary"]["behavior_risk_level"] == "medium"
+    assert recent.json()["items"][0]["personal_behavior_reminders"][0]["type"] == "ignored_add_signal"
+    assert detail.json()["behavior_profile_summary"]["dominant_behavior_patterns"] == ["ignored_add_signal"]
 
 
 def test_start_trade_decision_task_creates_unified_task_without_question() -> None:

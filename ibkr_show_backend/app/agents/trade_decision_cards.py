@@ -587,6 +587,8 @@ class TradeDecisionCardPack:
     investment_thesis: dict | None = None
     # Stage 06 - user preference only; not an AI recommendation or risk cap.
     user_investment_policy: dict | None = None
+    # Stage 09 - user behavior reminders only; must not change evidence/risk rules.
+    behavior_profile_context: dict | None = None
     ai_policy_assessment: dict | None = None
 
     def to_dict(self) -> dict:
@@ -610,6 +612,7 @@ class TradeDecisionCardPack:
             "subagent_traces": [t.to_dict() if isinstance(t, TradeDecisionSubAgentTrace) else t for t in self.subagent_traces],
             "investment_thesis": self.investment_thesis,
             "user_investment_policy": self.user_investment_policy,
+            "behavior_profile_context": self.behavior_profile_context,
             "ai_policy_assessment": self.ai_policy_assessment,
         }
 

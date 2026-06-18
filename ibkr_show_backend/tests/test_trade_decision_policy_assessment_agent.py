@@ -229,6 +229,49 @@ def test_ai_policy_output_validation_rejects_bad_position_order_and_high_confide
         AiPolicyAssessmentOutput.model_validate(_payload(ai_role_confidence="high", data_limitations=["缺少估值数据"]))
 
 
+def test_ai_policy_output_validation_rejects_empty_evaluated_assessment():
+    with pytest.raises(ValidationError):
+        AiPolicyAssessmentOutput.model_validate(
+            _payload(
+                ai_assessed_asset_role="unknown",
+                ai_recommended_min_position_pct=None,
+                ai_recommended_target_position_pct=None,
+                ai_recommended_max_position_pct=None,
+                ai_recommended_target_position_range_pct=None,
+                ai_position_stance="unknown",
+                challenge_level="not_evaluated",
+                recommended_action_bias="unknown",
+            )
+        )
+
+
+def test_empty_evaluated_ai_policy_payload_returns_fallback():
+    empty_evaluated = _payload(
+        ai_assessed_asset_role="unknown",
+        ai_role_confidence="low",
+        ai_recommended_min_position_pct=None,
+        ai_recommended_target_position_pct=None,
+        ai_recommended_max_position_pct=None,
+        ai_recommended_target_position_range_pct=None,
+        ai_position_stance="unknown",
+        gap_to_ai_target_pct=None,
+        gap_to_ai_max_pct=None,
+        challenge_level="not_evaluated",
+        challenge_reason=None,
+        preference_alignment_summary="",
+        recommended_action_bias="unknown",
+        risk_budget={"reason": ""},
+        key_reasons=[],
+        key_risks=[],
+        data_limitations=[],
+    )
+    assessment, trace = TradeDecisionPolicyAssessmentAgent(FakeLLM(empty_evaluated)).generate(_card_pack())
+
+    assert trace.status == "fallback"
+    assert assessment["status"] == "fallback"
+    assert AI_POLICY_ASSESSMENT_FAILURE_LIMITATION in assessment["data_limitations"]
+
+
 def test_user_forbidden_role_prevents_silent_allow_add():
     pack = _card_pack()
     pack.user_investment_policy["user_investment_preference"]["asset_role"] = "forbidden"

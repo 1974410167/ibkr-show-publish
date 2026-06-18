@@ -52,6 +52,7 @@ class TradeDecisionAgent:
         replay_service=None,
         monitoring_service=None,
         investment_policy_service=None,
+        behavior_profile_service=None,
     ) -> None:
         self.evidence_builder = evidence_builder
         self.llm_service = llm_service
@@ -61,6 +62,7 @@ class TradeDecisionAgent:
         self.replay_service = replay_service
         self.monitoring_service = monitoring_service
         self.investment_policy_service = investment_policy_service
+        self.behavior_profile_service = behavior_profile_service
         self._mcp_client: LongbridgeMCPClient | None = None
         self._graph_runner: TradeDecisionGraphRunner | None = None
 
@@ -94,6 +96,7 @@ class TradeDecisionAgent:
                 repository=self.repository,
                 mcp_adapter=adapter,
                 investment_policy_service=self.investment_policy_service,
+                behavior_profile_service=self.behavior_profile_service,
                 prompt_service=self.prompt_service,
                 trace_service=self.trace_service,
                 replay_service=self.replay_service,

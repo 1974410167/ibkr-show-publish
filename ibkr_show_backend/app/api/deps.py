@@ -3,6 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Cookie, Depends, HTTPException, status
+from fastapi.params import Depends as DependsParam
 
 from app.clients.es_client import ElasticsearchClient
 from app.clients.cache_client import RedisCacheClient
@@ -13,6 +14,47 @@ from app.agents.account_copilot.tool_registry import AccountCopilotToolRegistry,
 from app.agents.eval_judge import AgentEvalJudgeService
 from app.core.auth import SESSION_COOKIE_NAME, AuthSession, verify_session_token
 from app.core.config import Settings, get_settings
+from app.domains.portfolio_manager.action_alerts.alert_builder import PortfolioActionAlertBuilder
+from app.domains.portfolio_manager.action_alerts.email_renderer import PortfolioActionAlertEmailRenderer
+from app.domains.portfolio_manager.action_alerts.repository import PortfolioActionAlertRepository
+from app.domains.portfolio_manager.action_alerts.service import PortfolioActionAlertService
+from app.domains.portfolio_manager.constitution.repository import PortfolioConstitutionRepository
+from app.domains.portfolio_manager.constitution.service import PortfolioConstitutionService
+from app.domains.portfolio_manager.decision_orchestrator.repository import PortfolioAutoDecisionRepository
+from app.domains.portfolio_manager.decision_orchestrator.runner import PortfolioAutoDecisionRunner
+from app.domains.portfolio_manager.decision_orchestrator.service import PortfolioAutoDecisionService
+from app.domains.portfolio_manager.decision_orchestrator.trigger_selector import PortfolioAutoDecisionTriggerSelector
+from app.domains.portfolio_manager.daily_loop.repository import PortfolioDailyLoopRepository
+from app.domains.portfolio_manager.daily_loop.service import PortfolioDailyLoopService
+from app.domains.portfolio_manager.evaluation.outcome_evaluator import PortfolioAutoDecisionOutcomeEvaluator, PriceForwardReturnProvider
+from app.domains.portfolio_manager.evaluation.portfolio_replay import PortfolioReportEvaluator
+from app.domains.portfolio_manager.evaluation.repository import PortfolioEvaluationRepository
+from app.domains.portfolio_manager.evaluation.service import PortfolioEvaluationService
+from app.domains.portfolio_manager.evaluation.watchtower_evaluator import PortfolioWatchtowerEvaluator
+from app.domains.portfolio_manager.improvement.pattern_detector import PortfolioImprovementPatternDetector
+from app.domains.portfolio_manager.improvement.recommendation_builder import PortfolioImprovementRecommendationBuilder
+from app.domains.portfolio_manager.improvement.repository import PortfolioImprovementRepository
+from app.domains.portfolio_manager.improvement.service import PortfolioImprovementService
+from app.domains.portfolio_manager.portfolio_review.allocation_analyzer import PortfolioAllocationAnalyzer
+from app.domains.portfolio_manager.portfolio_review.exposure_analyzer import PortfolioExposureAnalyzer
+from app.domains.portfolio_manager.portfolio_review.report_composer import PortfolioReportComposer
+from app.domains.portfolio_manager.portfolio_review.repository import PortfolioReviewRepository
+from app.domains.portfolio_manager.portfolio_review.service import PortfolioReviewService
+from app.domains.portfolio_manager.universe.repository import PortfolioUniverseRepository
+from app.domains.portfolio_manager.universe.service import PortfolioUniverseService
+from app.domains.portfolio_manager.watchtower.repository import PortfolioWatchtowerRepository
+from app.domains.portfolio_manager.watchtower.scanner import PortfolioWatchtowerScanner, WatchtowerPriceHistoryProvider
+from app.domains.portfolio_manager.watchtower.service import PortfolioWatchtowerService
+from app.domains.performance.account_performance_calculator import AccountPerformanceCalculator
+from app.domains.performance.baseline_service import PerformanceBaselineService
+from app.domains.performance.benchmark_price_backfill import BenchmarkPriceBackfillService
+from app.domains.performance.benchmark_price_provider import BenchmarkPriceProvider
+from app.domains.performance.buy_and_hold_baseline import StartPortfolioBuyAndHoldBaselineCalculator
+from app.domains.performance.cashflow_classifier import AccountCashFlowClassifier
+from app.domains.performance.cashflow_matched_baseline import CashFlowMatchedBaselineCalculator
+from app.domains.performance.price_auto_backfill import PerformancePriceAutoBackfillService
+from app.domains.performance.repository import AccountPerformanceRepository
+from app.domains.performance.service import AccountPerformanceService
 from app.services.account_service import AccountService
 from app.services.account_copilot import (
     AccountCopilotEventBus,
@@ -76,10 +118,14 @@ from app.services.longbridge_service import LongbridgeExternalDataClient
 from app.services.longbridge_openapi_oauth import LongbridgeOpenAPIOAuthService
 from app.services.longbridge_oauth_token_service import LongbridgeOAuthTokenService
 from app.services.trade_decision_agent import TradeDecisionAgent
+from app.services.trade_decision_behavior_profile import TradeDecisionBehaviorProfileService
 from app.services.trade_decision_evidence import TradeDecisionEvidenceBuilder
+from app.services.trade_decision_execution_alignment import TradeDecisionExecutionAlignmentService
 from app.services.trade_decision_metrics import TradeDecisionMetricsCalculator
+from app.services.trade_decision_override_annotation_repository import TradeDecisionOverrideAnnotationRepository
 from app.services.trade_decision_outcome_replay import TradeDecisionOutcomePriceProvider, TradeDecisionOutcomeReplayService
 from app.services.trade_decision_repository import TradeDecisionRepository
+from app.services.trade_decision_shadow_backtest import ShadowBacktestPriceProvider, TradeDecisionShadowBacktestService
 from app.services.risk_assessment_agent import RiskAssessmentAgent
 from app.services.risk_assessment_repository import RiskAssessmentRepository
 from app.services.position_service import PositionService
@@ -126,6 +172,58 @@ def get_cash_flow_service() -> CashFlowService:
     return CashFlowService(get_es_client(), get_settings())
 
 
+def get_account_performance_repository() -> AccountPerformanceRepository:
+    return AccountPerformanceRepository(get_es_client(), get_settings())
+
+
+def get_account_cashflow_classifier() -> AccountCashFlowClassifier:
+    return AccountCashFlowClassifier()
+
+
+def get_account_performance_calculator() -> AccountPerformanceCalculator:
+    return AccountPerformanceCalculator()
+
+
+def get_account_performance_service(
+    repository: AccountPerformanceRepository = Depends(get_account_performance_repository),
+    cashflow_classifier: AccountCashFlowClassifier = Depends(get_account_cashflow_classifier),
+    calculator: AccountPerformanceCalculator = Depends(get_account_performance_calculator),
+) -> AccountPerformanceService:
+    return AccountPerformanceService(
+        repository=repository,
+        cashflow_classifier=cashflow_classifier,
+        calculator=calculator,
+    )
+
+
+def get_benchmark_price_provider() -> BenchmarkPriceProvider:
+    return BenchmarkPriceProvider(get_es_client(), get_settings())
+
+
+def get_cashflow_matched_baseline_calculator() -> CashFlowMatchedBaselineCalculator:
+    return CashFlowMatchedBaselineCalculator()
+
+
+def get_start_portfolio_buy_and_hold_baseline_calculator() -> StartPortfolioBuyAndHoldBaselineCalculator:
+    return StartPortfolioBuyAndHoldBaselineCalculator()
+
+
+def get_performance_baseline_service(
+    account_performance_service: AccountPerformanceService = Depends(get_account_performance_service),
+    repository: AccountPerformanceRepository = Depends(get_account_performance_repository),
+    price_provider: BenchmarkPriceProvider = Depends(get_benchmark_price_provider),
+    cashflow_matched_calculator: CashFlowMatchedBaselineCalculator = Depends(get_cashflow_matched_baseline_calculator),
+    buy_and_hold_calculator: StartPortfolioBuyAndHoldBaselineCalculator = Depends(get_start_portfolio_buy_and_hold_baseline_calculator),
+) -> PerformanceBaselineService:
+    return PerformanceBaselineService(
+        account_performance_service=account_performance_service,
+        repository=repository,
+        price_provider=price_provider,
+        cashflow_matched_calculator=cashflow_matched_calculator,
+        buy_and_hold_calculator=buy_and_hold_calculator,
+    )
+
+
 def get_dividend_service() -> DividendService:
     return DividendService(get_es_client(), get_settings())
 
@@ -133,6 +231,30 @@ def get_dividend_service() -> DividendService:
 def get_longbridge_external_data_client() -> LongbridgeExternalDataClient:
     settings = get_settings()
     return LongbridgeExternalDataClient(settings, get_longbridge_openapi_oauth_service(settings))
+
+
+def get_benchmark_price_backfill_service(
+    repository: AccountPerformanceRepository = Depends(get_account_performance_repository),
+    longbridge_client: LongbridgeExternalDataClient = Depends(get_longbridge_external_data_client),
+) -> BenchmarkPriceBackfillService:
+    return BenchmarkPriceBackfillService(
+        es_client=get_es_client(),
+        settings=get_settings(),
+        repository=repository,
+        longbridge_client=longbridge_client,
+    )
+
+
+def get_performance_price_auto_backfill_service(
+    repository: AccountPerformanceRepository = Depends(get_account_performance_repository),
+    longbridge_client: LongbridgeExternalDataClient = Depends(get_longbridge_external_data_client),
+) -> PerformancePriceAutoBackfillService:
+    return PerformancePriceAutoBackfillService(
+        es_client=get_es_client(),
+        settings=get_settings(),
+        repository=repository,
+        longbridge_client=longbridge_client,
+    )
 
 
 def get_llm_call_metrics_repository() -> LLMCallMetricsRepository:
@@ -168,7 +290,54 @@ def get_investment_policy_repository() -> InvestmentPolicyRepository:
 def get_investment_policy_service(
     repository: InvestmentPolicyRepository = Depends(get_investment_policy_repository),
 ) -> InvestmentPolicyService:
+    if isinstance(repository, DependsParam):
+        repository = get_investment_policy_repository()
     return InvestmentPolicyService(repository)
+
+
+def get_portfolio_constitution_repository() -> PortfolioConstitutionRepository:
+    return PortfolioConstitutionRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_constitution_service(
+    repository: PortfolioConstitutionRepository = Depends(get_portfolio_constitution_repository),
+) -> PortfolioConstitutionService:
+    return PortfolioConstitutionService(repository)
+
+
+def get_portfolio_universe_repository() -> PortfolioUniverseRepository:
+    return PortfolioUniverseRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_universe_service(
+    repository: PortfolioUniverseRepository = Depends(get_portfolio_universe_repository),
+    position_service: PositionService = Depends(get_position_service),
+) -> PortfolioUniverseService:
+    return PortfolioUniverseService(repository, position_service)
+
+
+def get_portfolio_watchtower_repository() -> PortfolioWatchtowerRepository:
+    return PortfolioWatchtowerRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_watchtower_scanner() -> PortfolioWatchtowerScanner:
+    return PortfolioWatchtowerScanner(WatchtowerPriceHistoryProvider(get_es_client(), get_settings()))
+
+
+def get_portfolio_watchtower_service(
+    repository: PortfolioWatchtowerRepository = Depends(get_portfolio_watchtower_repository),
+    universe_service: PortfolioUniverseService = Depends(get_portfolio_universe_service),
+    constitution_service: PortfolioConstitutionService = Depends(get_portfolio_constitution_service),
+    position_service: PositionService = Depends(get_position_service),
+    scanner: PortfolioWatchtowerScanner = Depends(get_portfolio_watchtower_scanner),
+) -> PortfolioWatchtowerService:
+    return PortfolioWatchtowerService(
+        repository=repository,
+        universe_service=universe_service,
+        constitution_service=constitution_service,
+        position_service=position_service,
+        scanner=scanner,
+    )
 
 
 def get_email_service() -> EmailService:
@@ -514,6 +683,33 @@ def get_trade_decision_outcome_replay_service() -> TradeDecisionOutcomeReplaySer
     )
 
 
+def get_trade_decision_shadow_backtest_service() -> TradeDecisionShadowBacktestService:
+    return TradeDecisionShadowBacktestService(
+        get_trade_decision_repository(),
+        ShadowBacktestPriceProvider(get_es_client(), get_settings()),
+    )
+
+
+def get_trade_decision_execution_alignment_service() -> TradeDecisionExecutionAlignmentService:
+    return TradeDecisionExecutionAlignmentService(
+        get_trade_decision_repository(),
+        get_es_client(),
+        get_settings(),
+        shadow_backtest_service=get_trade_decision_shadow_backtest_service(),
+    )
+
+
+def get_trade_decision_override_annotation_repository() -> TradeDecisionOverrideAnnotationRepository:
+    return TradeDecisionOverrideAnnotationRepository(get_es_client(), get_settings())
+
+
+def get_trade_decision_behavior_profile_service() -> TradeDecisionBehaviorProfileService:
+    return TradeDecisionBehaviorProfileService(
+        get_trade_decision_execution_alignment_service(),
+        get_trade_decision_override_annotation_repository(),
+    )
+
+
 def get_daily_position_review_repository() -> DailyPositionReviewRepository:
     return DailyPositionReviewRepository(get_es_client(), get_settings())
 
@@ -581,6 +777,208 @@ def get_trade_decision_agent() -> TradeDecisionAgent:
         monitoring_service=get_account_copilot_monitoring_service(
             repository=get_account_copilot_monitoring_repository(),
         ),
+        investment_policy_service=get_investment_policy_service(),
+        behavior_profile_service=get_trade_decision_behavior_profile_service(),
+    )
+
+
+def get_portfolio_auto_decision_repository() -> PortfolioAutoDecisionRepository:
+    return PortfolioAutoDecisionRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_auto_decision_trigger_selector() -> PortfolioAutoDecisionTriggerSelector:
+    return PortfolioAutoDecisionTriggerSelector()
+
+
+def get_portfolio_auto_decision_runner(
+    trade_decision_agent: TradeDecisionAgent = Depends(get_trade_decision_agent),
+) -> PortfolioAutoDecisionRunner:
+    return PortfolioAutoDecisionRunner(trade_decision_agent)
+
+
+def get_portfolio_auto_decision_service(
+    repository: PortfolioAutoDecisionRepository = Depends(get_portfolio_auto_decision_repository),
+    watchtower_service: PortfolioWatchtowerService = Depends(get_portfolio_watchtower_service),
+    constitution_service: PortfolioConstitutionService = Depends(get_portfolio_constitution_service),
+    universe_service: PortfolioUniverseService = Depends(get_portfolio_universe_service),
+    trigger_selector: PortfolioAutoDecisionTriggerSelector = Depends(get_portfolio_auto_decision_trigger_selector),
+    runner: PortfolioAutoDecisionRunner = Depends(get_portfolio_auto_decision_runner),
+) -> PortfolioAutoDecisionService:
+    return PortfolioAutoDecisionService(
+        repository=repository,
+        watchtower_service=watchtower_service,
+        constitution_service=constitution_service,
+        universe_service=universe_service,
+        trigger_selector=trigger_selector,
+        runner=runner,
+    )
+
+
+def get_portfolio_review_repository() -> PortfolioReviewRepository:
+    return PortfolioReviewRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_exposure_analyzer() -> PortfolioExposureAnalyzer:
+    return PortfolioExposureAnalyzer()
+
+
+def get_portfolio_allocation_analyzer() -> PortfolioAllocationAnalyzer:
+    return PortfolioAllocationAnalyzer()
+
+
+def get_portfolio_report_composer() -> PortfolioReportComposer:
+    return PortfolioReportComposer()
+
+
+def get_portfolio_review_service(
+    repository: PortfolioReviewRepository = Depends(get_portfolio_review_repository),
+    constitution_service: PortfolioConstitutionService = Depends(get_portfolio_constitution_service),
+    universe_service: PortfolioUniverseService = Depends(get_portfolio_universe_service),
+    watchtower_service: PortfolioWatchtowerService = Depends(get_portfolio_watchtower_service),
+    auto_decision_service: PortfolioAutoDecisionService = Depends(get_portfolio_auto_decision_service),
+    position_service: PositionService = Depends(get_position_service),
+    account_service: AccountService = Depends(get_account_service),
+    exposure_analyzer: PortfolioExposureAnalyzer = Depends(get_portfolio_exposure_analyzer),
+    allocation_analyzer: PortfolioAllocationAnalyzer = Depends(get_portfolio_allocation_analyzer),
+    report_composer: PortfolioReportComposer = Depends(get_portfolio_report_composer),
+) -> PortfolioReviewService:
+    return PortfolioReviewService(
+        repository=repository,
+        constitution_service=constitution_service,
+        universe_service=universe_service,
+        watchtower_service=watchtower_service,
+        auto_decision_service=auto_decision_service,
+        position_service=position_service,
+        account_service=account_service,
+        exposure_analyzer=exposure_analyzer,
+        allocation_analyzer=allocation_analyzer,
+        report_composer=report_composer,
+    )
+
+
+def get_portfolio_evaluation_repository() -> PortfolioEvaluationRepository:
+    return PortfolioEvaluationRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_price_forward_return_provider() -> PriceForwardReturnProvider:
+    return PriceForwardReturnProvider(get_es_client(), get_settings())
+
+
+def get_portfolio_watchtower_evaluator() -> PortfolioWatchtowerEvaluator:
+    return PortfolioWatchtowerEvaluator()
+
+
+def get_portfolio_auto_decision_evaluator() -> PortfolioAutoDecisionOutcomeEvaluator:
+    return PortfolioAutoDecisionOutcomeEvaluator()
+
+
+def get_portfolio_report_evaluator() -> PortfolioReportEvaluator:
+    return PortfolioReportEvaluator()
+
+
+def get_portfolio_evaluation_service(
+    repository: PortfolioEvaluationRepository = Depends(get_portfolio_evaluation_repository),
+    watchtower_repository: PortfolioWatchtowerRepository = Depends(get_portfolio_watchtower_repository),
+    auto_decision_repository: PortfolioAutoDecisionRepository = Depends(get_portfolio_auto_decision_repository),
+    portfolio_review_repository: PortfolioReviewRepository = Depends(get_portfolio_review_repository),
+    price_provider: PriceForwardReturnProvider = Depends(get_portfolio_price_forward_return_provider),
+    watchtower_evaluator: PortfolioWatchtowerEvaluator = Depends(get_portfolio_watchtower_evaluator),
+    auto_decision_evaluator: PortfolioAutoDecisionOutcomeEvaluator = Depends(get_portfolio_auto_decision_evaluator),
+    portfolio_report_evaluator: PortfolioReportEvaluator = Depends(get_portfolio_report_evaluator),
+) -> PortfolioEvaluationService:
+    return PortfolioEvaluationService(
+        repository=repository,
+        watchtower_repository=watchtower_repository,
+        auto_decision_repository=auto_decision_repository,
+        portfolio_review_repository=portfolio_review_repository,
+        price_provider=price_provider,
+        watchtower_evaluator=watchtower_evaluator,
+        auto_decision_evaluator=auto_decision_evaluator,
+        portfolio_report_evaluator=portfolio_report_evaluator,
+    )
+
+
+def get_portfolio_improvement_repository() -> PortfolioImprovementRepository:
+    return PortfolioImprovementRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_pattern_detector() -> PortfolioImprovementPatternDetector:
+    return PortfolioImprovementPatternDetector()
+
+
+def get_portfolio_recommendation_builder() -> PortfolioImprovementRecommendationBuilder:
+    return PortfolioImprovementRecommendationBuilder()
+
+
+def get_portfolio_improvement_service(
+    repository: PortfolioImprovementRepository = Depends(get_portfolio_improvement_repository),
+    evaluation_repository: PortfolioEvaluationRepository = Depends(get_portfolio_evaluation_repository),
+    pattern_detector: PortfolioImprovementPatternDetector = Depends(get_portfolio_pattern_detector),
+    recommendation_builder: PortfolioImprovementRecommendationBuilder = Depends(get_portfolio_recommendation_builder),
+) -> PortfolioImprovementService:
+    return PortfolioImprovementService(
+        repository=repository,
+        evaluation_repository=evaluation_repository,
+        pattern_detector=pattern_detector,
+        recommendation_builder=recommendation_builder,
+    )
+
+
+def get_portfolio_daily_loop_repository() -> PortfolioDailyLoopRepository:
+    return PortfolioDailyLoopRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_daily_loop_service(
+    repository: PortfolioDailyLoopRepository = Depends(get_portfolio_daily_loop_repository),
+    universe_service: PortfolioUniverseService = Depends(get_portfolio_universe_service),
+    watchtower_service: PortfolioWatchtowerService = Depends(get_portfolio_watchtower_service),
+    auto_decision_service: PortfolioAutoDecisionService = Depends(get_portfolio_auto_decision_service),
+    portfolio_review_service: PortfolioReviewService = Depends(get_portfolio_review_service),
+    evaluation_service: PortfolioEvaluationService = Depends(get_portfolio_evaluation_service),
+    improvement_service: PortfolioImprovementService = Depends(get_portfolio_improvement_service),
+) -> PortfolioDailyLoopService:
+    return PortfolioDailyLoopService(
+        repository=repository,
+        universe_service=universe_service,
+        watchtower_service=watchtower_service,
+        auto_decision_service=auto_decision_service,
+        portfolio_review_service=portfolio_review_service,
+        evaluation_service=evaluation_service,
+        improvement_service=improvement_service,
+    )
+
+
+def get_portfolio_action_alert_repository() -> PortfolioActionAlertRepository:
+    return PortfolioActionAlertRepository(get_es_client(), get_settings())
+
+
+def get_portfolio_action_alert_builder() -> PortfolioActionAlertBuilder:
+    return PortfolioActionAlertBuilder()
+
+
+def get_portfolio_action_alert_email_renderer() -> PortfolioActionAlertEmailRenderer:
+    return PortfolioActionAlertEmailRenderer()
+
+
+def get_portfolio_action_alert_service(
+    repository: PortfolioActionAlertRepository = Depends(get_portfolio_action_alert_repository),
+    daily_loop_service: PortfolioDailyLoopService = Depends(get_portfolio_daily_loop_service),
+    auto_decision_service: PortfolioAutoDecisionService = Depends(get_portfolio_auto_decision_service),
+    portfolio_review_service: PortfolioReviewService = Depends(get_portfolio_review_service),
+    watchtower_service: PortfolioWatchtowerService = Depends(get_portfolio_watchtower_service),
+    email_service: EmailService = Depends(get_email_service),
+    builder: PortfolioActionAlertBuilder = Depends(get_portfolio_action_alert_builder),
+    renderer: PortfolioActionAlertEmailRenderer = Depends(get_portfolio_action_alert_email_renderer),
+) -> PortfolioActionAlertService:
+    return PortfolioActionAlertService(
+        repository=repository,
+        daily_loop_service=daily_loop_service,
+        auto_decision_service=auto_decision_service,
+        portfolio_review_service=portfolio_review_service,
+        watchtower_service=watchtower_service,
+        email_service=email_service,
+        builder=builder,
+        renderer=renderer,
     )
 
 

@@ -21,6 +21,9 @@ class EmailSettingsResponse(BaseModel):
     daily_snapshot_email_enabled: bool
     daily_snapshot_email_to: str
     daily_snapshot_subject_prefix: str
+    portfolio_action_alerts_email_enabled: bool
+    portfolio_action_alerts_email_to: str
+    portfolio_action_alerts_subject_prefix: str
 
 
 class EmailSettingsUpdateRequest(BaseModel):
@@ -38,6 +41,9 @@ class EmailSettingsUpdateRequest(BaseModel):
     daily_snapshot_email_enabled: bool
     daily_snapshot_email_to: str
     daily_snapshot_subject_prefix: str | None = None
+    portfolio_action_alerts_email_enabled: bool = False
+    portfolio_action_alerts_email_to: str = ""
+    portfolio_action_alerts_subject_prefix: str | None = None
 
 
 class EmailSettingsMutationResponse(BaseModel):

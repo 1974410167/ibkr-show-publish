@@ -34,6 +34,7 @@ const protectedNavItems = [
   { label: 'AI 决策', icon: 'pi pi-compass', to: '/agent/trade-decision' },
   { label: 'AI 复盘', icon: 'pi pi-book', to: '/agent/trade-review' },
   { label: '账户 Copilot', icon: 'pi pi-comments', to: '/agent/account-copilot' },
+  { label: '组合经理', icon: 'pi pi-sitemap', to: '/portfolio-manager' },
   { label: '后台管理', icon: 'pi pi-cog', to: '/admin/ibkr' },
 ]
 
@@ -94,11 +95,14 @@ function isActive(path: string): boolean {
   if (path === '/agent/account-copilot') {
     return route.path.startsWith('/agent/account-copilot')
   }
+  if (path === '/portfolio-manager') {
+    return route.path.startsWith('/portfolio-manager')
+  }
   return false
 }
 
 function isProtectedPath(path: string): boolean {
-  return path === '/trades' || path === '/cash-flows' || path === '/dividends' || path.startsWith('/admin') || path.startsWith('/agent')
+  return path === '/trades' || path === '/cash-flows' || path === '/dividends' || path.startsWith('/admin') || path.startsWith('/agent') || path === '/portfolio-manager'
 }
 
 function navigate(path: string): void {

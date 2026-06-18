@@ -53,6 +53,8 @@ TRADE_DECISION_INDEX_BODY = {
             "asset_debate": {"type": "object", "enabled": False},
             "trade_plan": {"type": "object", "enabled": False},
             "risk_gate": {"type": "object", "enabled": False},
+            "behavior_profile_summary": {"type": "object", "enabled": False},
+            "personal_behavior_reminders": {"type": "object", "enabled": False},
             "llm_error_summary": {"type": "object", "enabled": False},
             "agent_run_trace": {"type": "object", "enabled": False},
             "agent_replay": {"type": "object", "enabled": False},
@@ -197,6 +199,56 @@ class TradeDecisionRepository:
                         "trade_plan",
                         "risk_gate",
                         "position_advice",
+                        "user_investment_policy_summary",
+                        "ai_policy_assessment",
+                    ],
+                },
+            )
+        except ESIndexNotFoundError:
+            return []
+        return [hit["_source"] for hit in response.get("hits", {}).get("hits", [])]
+
+    def list_decisions_for_backtest(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        symbol: str | None = None,
+        decision_type: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict]:
+        filters = []
+        if start_date or end_date:
+            range_filter: dict[str, str] = {}
+            if start_date:
+                range_filter["gte"] = start_date
+            if end_date:
+                range_filter["lte"] = end_date
+            filters.append({"range": {"created_at": range_filter}})
+        if symbol:
+            filters.append({"term": {"symbol": symbol}})
+        if decision_type:
+            filters.append({"term": {"decision_type": decision_type}})
+        try:
+            response = self.es_client.search(
+                index=self.settings.es_trade_decision_index,
+                body={
+                    "query": {"bool": {"filter": filters or [{"match_all": {}}]}},
+                    "sort": [{"created_at": {"order": "asc"}}],
+                    "size": limit,
+                    "_source": [
+                        "id",
+                        "symbol",
+                        "decision_type",
+                        "created_at",
+                        "action",
+                        "draft_action",
+                        "risk_adjusted_action",
+                        "final_action",
+                        "position_advice",
+                        "execution_plan",
+                        "trade_plan",
+                        "risk_gate",
                         "user_investment_policy_summary",
                         "ai_policy_assessment",
                     ],

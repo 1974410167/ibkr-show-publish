@@ -243,6 +243,7 @@ class TestGraphParallelStructure:
         node_names = list(graph_obj.nodes.keys())
         assert "build_account_facts" in node_names
         assert "load_user_investment_policy" in node_names
+        assert "load_behavior_profile_context" in node_names
         assert "account_fit" in node_names
         assert "market_trend" in node_names
         assert "fundamental_valuation" in node_names
@@ -265,6 +266,7 @@ class TestGraphParallelStructure:
         node_ids = {node["id"] for node in TRADE_DECISION_GRAPH_NODES}
         for node_id in {
             "load_user_investment_policy",
+            "load_behavior_profile_context",
             "market_event_context",
             "ai_policy_assessment",
             "bull_thesis",
@@ -282,11 +284,12 @@ class TestGraphParallelStructure:
         edges = {(edge["source"], edge["target"]) for edge in TRADE_DECISION_GRAPH_EDGES}
         expected = {
             ("build_account_facts", "load_user_investment_policy"),
-            ("load_user_investment_policy", "account_fit"),
-            ("load_user_investment_policy", "market_trend"),
-            ("load_user_investment_policy", "fundamental_valuation"),
-            ("load_user_investment_policy", "event_catalyst"),
-            ("load_user_investment_policy", "market_event_context"),
+            ("load_user_investment_policy", "load_behavior_profile_context"),
+            ("load_behavior_profile_context", "account_fit"),
+            ("load_behavior_profile_context", "market_trend"),
+            ("load_behavior_profile_context", "fundamental_valuation"),
+            ("load_behavior_profile_context", "event_catalyst"),
+            ("load_behavior_profile_context", "market_event_context"),
             ("account_fit", "build_card_pack"),
             ("market_trend", "build_card_pack"),
             ("fundamental_valuation", "build_card_pack"),
@@ -326,7 +329,7 @@ class TestGraphParallelStructure:
         ]
         assert edges_from_facts == ["load_user_investment_policy"]
 
-    def test_user_policy_node_fans_out_to_five(self):
+    def test_behavior_profile_node_fans_out_to_five(self):
         from app.agents.trade_decision_graph.graph import build_trade_decision_graph, TradeDecisionGraphDeps
 
         deps = TradeDecisionGraphDeps(
@@ -342,11 +345,17 @@ class TestGraphParallelStructure:
             edge.target for edge in graph_obj.edges
             if edge.source == "load_user_investment_policy"
         ]
-        assert "account_fit" in edges_from_policy
-        assert "market_trend" in edges_from_policy
-        assert "fundamental_valuation" in edges_from_policy
-        assert "event_catalyst" in edges_from_policy
-        assert "market_event_context" in edges_from_policy
+        assert edges_from_policy == ["load_behavior_profile_context"]
+
+        edges_from_behavior = [
+            edge.target for edge in graph_obj.edges
+            if edge.source == "load_behavior_profile_context"
+        ]
+        assert "account_fit" in edges_from_behavior
+        assert "market_trend" in edges_from_behavior
+        assert "fundamental_valuation" in edges_from_behavior
+        assert "event_catalyst" in edges_from_behavior
+        assert "market_event_context" in edges_from_behavior
 
     def test_five_evidence_nodes_fan_in_to_build_card_pack(self):
         """All 5 evidence nodes should have edges to build_card_pack."""
@@ -528,6 +537,7 @@ class TestNodesClosureDeps:
         from app.agents.trade_decision_graph.nodes import (
             make_build_account_facts_node,
             make_load_user_investment_policy_node,
+            make_load_behavior_profile_context_node,
             make_account_fit_node,
             make_market_trend_node,
             make_fundamental_valuation_node,
@@ -548,6 +558,7 @@ class TestNodesClosureDeps:
         for factory in [
             make_build_account_facts_node,
             make_load_user_investment_policy_node,
+            make_load_behavior_profile_context_node,
             make_account_fit_node,
             make_market_trend_node,
             make_fundamental_valuation_node,
@@ -573,6 +584,19 @@ class TestNodesClosureDeps:
         source = inspect.getsource(nodes)
         assert "state[\"_deps\"]" not in source
         assert "state['_deps']" not in source
+
+    def test_objective_evidence_nodes_do_not_read_behavior_profile_context(self):
+        from app.agents.trade_decision_graph import nodes
+
+        for factory_name in (
+            "make_account_fit_node",
+            "make_market_trend_node",
+            "make_fundamental_valuation_node",
+            "make_event_catalyst_node",
+            "make_market_event_context_node",
+        ):
+            source = inspect.getsource(getattr(nodes, factory_name))
+            assert "behavior_profile_context" not in source
 
 
 class TestUserInvestmentPolicyNode:
@@ -609,6 +633,55 @@ class TestUserInvestmentPolicyNode:
         assert result["user_investment_policy"]["source"] == "fallback"
         assert result["user_investment_policy"]["user_investment_preference"]["user_preferred_max_position_pct"] == 0.28
         assert "用户投资偏好读取失败" in result["data_limitations"][0]
+        assert result["node_traces"][0]["fallback_used"] is True
+
+
+class TestBehaviorProfileContextNode:
+    def test_load_behavior_profile_context_reads_lightweight_context(self):
+        from app.agents.trade_decision_graph.nodes import make_load_behavior_profile_context_node
+
+        deps = MagicMock()
+        deps.behavior_profile_service.get_recent_profile_context.return_value = {
+            "status": "available",
+            "lookback_days": 180,
+            "scope": "symbol",
+            "symbol": "AMD",
+            "behavior_risk_level": "medium",
+            "dominant_behavior_patterns": ["ignored_add_signal"] * 7,
+            "recent_lessons": ["wait"] * 7,
+            "coaching_hints": [{"message": "scale gradually"}] * 7,
+            "top_symbols_with_bias": [{"key": "AMD"}] * 7,
+            "net_behavior_value": -120.0,
+            "reminder_enabled": True,
+            "data_limitations": [],
+        }
+
+        result = make_load_behavior_profile_context_node(deps)({"normalized_symbol": "AMD.US"})
+
+        deps.behavior_profile_service.get_recent_profile_context.assert_called_once_with(days=180, symbol="AMD.US")
+        context = result["behavior_profile_context"]
+        assert context["status"] == "available"
+        assert context["behavior_risk_level"] == "medium"
+        assert len(context["dominant_behavior_patterns"]) == 5
+        assert len(context["recent_lessons"]) == 5
+        assert len(context["coaching_hints"]) == 5
+        assert result["behavior_profile_metadata"]["status"] == "available"
+        assert result["node_traces"][0]["node_name"] == "load_behavior_profile_context"
+        assert result["node_traces"][0]["fallback_used"] is False
+
+    def test_load_behavior_profile_context_failure_falls_back(self):
+        from app.agents.trade_decision_graph.nodes import make_load_behavior_profile_context_node
+
+        deps = MagicMock()
+        deps.behavior_profile_service.get_recent_profile_context.side_effect = RuntimeError("profile down")
+
+        result = make_load_behavior_profile_context_node(deps)({"normalized_symbol": "AMD"})
+
+        context = result["behavior_profile_context"]
+        assert context["status"] == "fallback"
+        assert context["reminder_enabled"] is False
+        assert "behavior_profile_unavailable" in context["data_limitations"][0]
+        assert "behavior_profile_unavailable" in result["data_limitations"][0]
         assert result["node_traces"][0]["fallback_used"] is True
 
 
@@ -773,6 +846,7 @@ class TestBuildCardPackNode:
             "fundamental_valuation_card": None,
             "event_catalyst_card": None,
             "risk_reward_card": None,
+            "behavior_profile_context": {"status": "available", "dominant_behavior_patterns": ["ignored_add_signal"]},
             "node_traces": [],
         }
 
@@ -784,6 +858,7 @@ class TestBuildCardPackNode:
         assert card_pack.event_catalyst_card is not None
         assert card_pack.market_event_context_card is not None
         assert card_pack.risk_reward_card is None
+        assert card_pack.behavior_profile_context["dominant_behavior_patterns"] == ["ignored_add_signal"]
 
     def test_market_event_context_trace_enters_subagent_traces(self):
         from app.agents.trade_decision_graph.nodes import make_build_card_pack_node
@@ -1800,7 +1875,8 @@ class TestFanInExecutionSemantics:
         node_names = [x["node_name"] for x in run_trace]
         expected_nodes = [
             "build_account_facts",
-            "account_fit", "market_trend", "fundamental_valuation", "event_catalyst",
+            "load_user_investment_policy", "load_behavior_profile_context",
+            "account_fit", "market_trend", "fundamental_valuation", "event_catalyst", "market_event_context",
             "build_card_pack", "trade_plan", "compose_decision", "persist_decision",
         ]
         for name in expected_nodes:

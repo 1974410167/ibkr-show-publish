@@ -200,6 +200,27 @@ class AiPolicyAssessmentOutput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_position_order_and_status(self) -> "AiPolicyAssessmentOutput":
+        if self.status == "evaluated":
+            missing_fields: list[str] = []
+            for field_name in (
+                "ai_recommended_target_position_pct",
+                "ai_recommended_max_position_pct",
+            ):
+                if getattr(self, field_name) is None:
+                    missing_fields.append(field_name)
+            if self.ai_assessed_asset_role == "unknown":
+                missing_fields.append("ai_assessed_asset_role")
+            if self.ai_position_stance == "unknown":
+                missing_fields.append("ai_position_stance")
+            if self.challenge_level == "not_evaluated":
+                missing_fields.append("challenge_level")
+            if self.recommended_action_bias == "unknown":
+                missing_fields.append("recommended_action_bias")
+            if missing_fields:
+                raise ValueError(
+                    "evaluated AI policy assessment requires complete position guidance: "
+                    + ", ".join(missing_fields)
+                )
         ordered = [
             self.ai_recommended_min_position_pct,
             self.ai_recommended_target_position_pct,

@@ -1,10 +1,18 @@
 import { request } from './http'
 import type {
+  TradeDecisionBehaviorInsight,
+  TradeDecisionBehaviorProfileResponse,
+  TradeDecisionExecutionAlignmentListResponse,
+  TradeDecisionExecutionAlignmentSummary,
+  TradeDecisionBacktestResponse,
   TradeDecisionHealth,
   TradeDecisionHoldingsResponse,
   TradeDecisionListResponse,
   TradeDecisionOutcomeListResponse,
   TradeDecisionOutcomeSummary,
+  TradeDecisionOverrideAnnotation,
+  TradeDecisionOverrideAnnotationListResponse,
+  TradeDecisionOverrideAnnotationPayload,
   TradeDecisionQualitySummary,
   TradeDecisionResult,
 } from '@/types/tradeDecision'
@@ -134,6 +142,150 @@ export function fetchTradeDecisionOutcomeList(params: {
 } = {}): Promise<TradeDecisionOutcomeListResponse> {
   return request<TradeDecisionOutcomeListResponse>(
     `/api/agent/trade-decision/outcome/list${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionBacktestSummary(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  initial_cash?: number
+  symbol?: string
+  decision_type?: string
+  benchmark_symbol?: string
+  execution_timing?: string
+  commission_bps?: number
+  min_commission?: number
+  include_costs?: string | number
+  mode?: string
+  limit?: number
+} = {}): Promise<TradeDecisionBacktestResponse> {
+  return request<TradeDecisionBacktestResponse>(
+    `/api/agent/trade-decision/backtest/summary${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionBacktestDetail(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  initial_cash?: number
+  symbol?: string
+  decision_type?: string
+  benchmark_symbol?: string
+  execution_timing?: string
+  commission_bps?: number
+  min_commission?: number
+  include_costs?: string | number
+  mode?: string
+  limit?: number
+} = {}): Promise<TradeDecisionBacktestResponse> {
+  return request<TradeDecisionBacktestResponse>(
+    `/api/agent/trade-decision/backtest/detail${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionAlignmentSummary(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  symbol?: string
+  decision_type?: string
+  match_window_days?: number
+  include_same_day?: string | number
+  alignment_label?: string
+  behavior_tag?: string
+  limit?: number
+} = {}): Promise<TradeDecisionExecutionAlignmentSummary> {
+  return request<TradeDecisionExecutionAlignmentSummary>(
+    `/api/agent/trade-decision/alignment/summary${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionAlignmentList(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  symbol?: string
+  decision_type?: string
+  match_window_days?: number
+  include_same_day?: string | number
+  alignment_label?: string
+  behavior_tag?: string
+  limit?: number
+} = {}): Promise<TradeDecisionExecutionAlignmentListResponse> {
+  return request<TradeDecisionExecutionAlignmentListResponse>(
+    `/api/agent/trade-decision/alignment/list${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionBehaviorProfile(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  symbol?: string
+  decision_type?: string
+  behavior_tag?: string
+  reason_category?: string
+  min_count?: number
+  limit?: number
+} = {}): Promise<TradeDecisionBehaviorProfileResponse> {
+  return request<TradeDecisionBehaviorProfileResponse>(
+    `/api/agent/trade-decision/behavior/profile${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionBehaviorInsights(params: {
+  start_date?: string
+  end_date?: string
+  days?: number
+  symbol?: string
+  decision_type?: string
+  behavior_tag?: string
+  reason_category?: string
+  min_count?: number
+  limit?: number
+} = {}): Promise<TradeDecisionBehaviorInsight[]> {
+  return request<TradeDecisionBehaviorInsight[]>(
+    `/api/agent/trade-decision/behavior/insights${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionOverrideAnnotations(params: {
+  symbol?: string
+  reason_category?: string
+  behavior_tag?: string
+  days?: number
+  limit?: number
+} = {}): Promise<TradeDecisionOverrideAnnotationListResponse> {
+  return request<TradeDecisionOverrideAnnotationListResponse>(
+    `/api/agent/trade-decision/behavior/annotations${toQueryString(params)}`,
+  )
+}
+
+export function fetchTradeDecisionOverrideAnnotation(decisionId: string): Promise<TradeDecisionOverrideAnnotation> {
+  return request<TradeDecisionOverrideAnnotation>(
+    `/api/agent/trade-decision/behavior/annotations/${encodeURIComponent(decisionId)}`,
+  )
+}
+
+export function saveTradeDecisionOverrideAnnotation(
+  decisionId: string,
+  payload: TradeDecisionOverrideAnnotationPayload,
+): Promise<TradeDecisionOverrideAnnotation> {
+  return request<TradeDecisionOverrideAnnotation>(
+    `/api/agent/trade-decision/behavior/annotations/${encodeURIComponent(decisionId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function deleteTradeDecisionOverrideAnnotation(decisionId: string): Promise<TradeDecisionOverrideAnnotation> {
+  return request<TradeDecisionOverrideAnnotation>(
+    `/api/agent/trade-decision/behavior/annotations/${encodeURIComponent(decisionId)}`,
+    { method: 'DELETE' },
   )
 }
 

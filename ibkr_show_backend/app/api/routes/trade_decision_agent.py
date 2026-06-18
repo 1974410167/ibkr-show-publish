@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.api.deps import (
@@ -5,8 +7,12 @@ from app.api.deps import (
     get_longbridge_external_data_client,
     get_trade_decision_account_facts_builder,
     get_trade_decision_agent,
+    get_trade_decision_behavior_profile_service,
+    get_trade_decision_execution_alignment_service,
+    get_trade_decision_override_annotation_repository,
     get_trade_decision_outcome_replay_service,
     get_trade_decision_repository,
+    get_trade_decision_shadow_backtest_service,
     require_authenticated_session,
 )
 from app.schemas.agent_tasks import AgentTaskListResponse, AgentTaskResponse
@@ -15,9 +21,18 @@ from app.schemas.trade_decision import (
     TradeDecisionAnalyzeAutoRequest,
     TradeDecisionAnalyzeEntryRequest,
     TradeDecisionAnalyzeHoldingRequest,
+    TradeDecisionBacktestResponse,
+    TradeDecisionBehaviorInsight,
+    TradeDecisionBehaviorProfileResponse,
+    TradeDecisionExecutionAlignmentItem,
+    TradeDecisionExecutionAlignmentListResponse,
+    TradeDecisionExecutionAlignmentSummary,
     TradeDecisionHealthResponse,
     TradeDecisionHoldingsResponse,
     TradeDecisionListResponse,
+    TradeDecisionOverrideAnnotation,
+    TradeDecisionOverrideAnnotationListResponse,
+    TradeDecisionOverrideAnnotationRequest,
     TradeDecisionOutcomeItem,
     TradeDecisionOutcomeListResponse,
     TradeDecisionOutcomeSummary,
@@ -30,9 +45,13 @@ from app.services.longbridge_service import LongbridgeExternalDataClient, normal
 from app.services.agent_task_repository import AgentTaskRepository
 from app.services.agent_task_progress import AgentTaskProgressReporter
 from app.services.trade_decision_agent import TradeDecisionAgent, TradeDecisionAgentError
+from app.services.trade_decision_behavior_profile import TradeDecisionBehaviorProfileService
+from app.services.trade_decision_execution_alignment import TradeDecisionExecutionAlignmentService
+from app.services.trade_decision_override_annotation_repository import TradeDecisionOverrideAnnotationRepository
 from app.services.trade_decision_quality_analytics import TradeDecisionQualityAnalyticsService
 from app.services.trade_decision_outcome_replay import TradeDecisionOutcomeReplayService
 from app.services.trade_decision_repository import TradeDecisionRepository
+from app.services.trade_decision_shadow_backtest import TradeDecisionShadowBacktestService
 
 router = APIRouter(prefix="/agent/trade-decision", tags=["trade-decision-agent"])
 AGENT_NAME = "trade_decision"
@@ -69,6 +88,8 @@ def _public_decision(document: dict, *, include_details: bool = True) -> TradeDe
         risk_gate=document.get("risk_gate") or {} if include_details else {},
         user_investment_policy_summary=document.get("user_investment_policy_summary"),
         ai_policy_assessment=document.get("ai_policy_assessment") or {},
+        behavior_profile_summary=document.get("behavior_profile_summary"),
+        personal_behavior_reminders=document.get("personal_behavior_reminders") or [],
         decision_quality=document.get("decision_quality") or {},
         run_trace=(document.get("run_trace") or document.get("evidence_pack", {}).get("tool_trace") or []) if include_details else [],
         metadata=document.get("metadata") or {},
@@ -322,6 +343,15 @@ def _parse_horizons(value: str | None) -> list[int] | None:
     return horizons or None
 
 
+def _parse_query_date(value: str | None, field_name: str):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must use YYYY-MM-DD") from exc
+
+
 @router.get("/outcome/summary", response_model=TradeDecisionOutcomeSummary)
 def get_trade_decision_outcome_summary(
     days: int = Query(default=90, ge=1, le=3650),
@@ -379,6 +409,310 @@ def get_trade_decision_outcome(
     if outcome is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trade decision not found")
     return outcome
+
+
+@router.get("/backtest/summary", response_model=TradeDecisionBacktestResponse)
+def get_trade_decision_backtest_summary(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    initial_cash: float = Query(default=100000.0, gt=0, le=1000000000),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    benchmark_symbol: str = Query(default="SPY"),
+    execution_timing: str = Query(default="next_close", pattern="^(next_close|same_close|next_open)$"),
+    commission_bps: float = Query(default=2.0, ge=0, le=1000),
+    min_commission: float = Query(default=1.0, ge=0, le=10000),
+    include_costs: bool = Query(default=True),
+    mode: str = Query(default="signal_only", pattern="^(signal_only|account_snapshot)$"),
+    limit: int = Query(default=2000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionShadowBacktestService = Depends(get_trade_decision_shadow_backtest_service),
+) -> TradeDecisionBacktestResponse:
+    return service.run_backtest(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        initial_cash=initial_cash,
+        symbol=symbol,
+        decision_type=decision_type,
+        benchmark_symbol=benchmark_symbol,
+        execution_timing=execution_timing,
+        commission_bps=commission_bps,
+        min_commission=min_commission,
+        include_costs=include_costs,
+        mode=mode,
+        limit=limit,
+        include_detail=False,
+    )
+
+
+@router.get("/backtest/detail", response_model=TradeDecisionBacktestResponse)
+def get_trade_decision_backtest_detail(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    initial_cash: float = Query(default=100000.0, gt=0, le=1000000000),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    benchmark_symbol: str = Query(default="SPY"),
+    execution_timing: str = Query(default="next_close", pattern="^(next_close|same_close|next_open)$"),
+    commission_bps: float = Query(default=2.0, ge=0, le=1000),
+    min_commission: float = Query(default=1.0, ge=0, le=10000),
+    include_costs: bool = Query(default=True),
+    mode: str = Query(default="signal_only", pattern="^(signal_only|account_snapshot)$"),
+    limit: int = Query(default=2000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionShadowBacktestService = Depends(get_trade_decision_shadow_backtest_service),
+) -> TradeDecisionBacktestResponse:
+    return service.run_backtest(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        initial_cash=initial_cash,
+        symbol=symbol,
+        decision_type=decision_type,
+        benchmark_symbol=benchmark_symbol,
+        execution_timing=execution_timing,
+        commission_bps=commission_bps,
+        min_commission=min_commission,
+        include_costs=include_costs,
+        mode=mode,
+        limit=limit,
+        include_detail=True,
+    )
+
+
+@router.get("/alignment/summary", response_model=TradeDecisionExecutionAlignmentSummary)
+def get_trade_decision_alignment_summary(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    match_window_days: int = Query(default=5, ge=0, le=60),
+    include_same_day: bool = Query(default=True),
+    alignment_label: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionExecutionAlignmentService = Depends(get_trade_decision_execution_alignment_service),
+) -> TradeDecisionExecutionAlignmentSummary:
+    return service.build_alignment(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        symbol=symbol,
+        decision_type=decision_type,
+        match_window_days=match_window_days,
+        include_same_day=include_same_day,
+        alignment_label=alignment_label,
+        behavior_tag=behavior_tag,
+        limit=limit,
+    ).summary
+
+
+@router.get("/alignment/list", response_model=TradeDecisionExecutionAlignmentListResponse)
+def list_trade_decision_alignment(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    match_window_days: int = Query(default=5, ge=0, le=60),
+    include_same_day: bool = Query(default=True),
+    alignment_label: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionExecutionAlignmentService = Depends(get_trade_decision_execution_alignment_service),
+) -> TradeDecisionExecutionAlignmentListResponse:
+    return service.build_alignment(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        symbol=symbol,
+        decision_type=decision_type,
+        match_window_days=match_window_days,
+        include_same_day=include_same_day,
+        alignment_label=alignment_label,
+        behavior_tag=behavior_tag,
+        limit=limit,
+    )
+
+
+@router.get("/alignment/{decision_id}", response_model=TradeDecisionExecutionAlignmentItem)
+def get_trade_decision_alignment(
+    decision_id: str,
+    match_window_days: int = Query(default=5, ge=0, le=60),
+    include_same_day: bool = Query(default=True),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionExecutionAlignmentService = Depends(get_trade_decision_execution_alignment_service),
+) -> TradeDecisionExecutionAlignmentItem:
+    item = service.get_alignment(decision_id, match_window_days=match_window_days, include_same_day=include_same_day)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trade decision not found")
+    return item
+
+
+@router.get("/behavior/annotations", response_model=TradeDecisionOverrideAnnotationListResponse)
+def list_trade_decision_override_annotations(
+    symbol: str | None = Query(default=None),
+    reason_category: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    days: int | None = Query(default=None, ge=1, le=3650),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    repository: TradeDecisionOverrideAnnotationRepository = Depends(get_trade_decision_override_annotation_repository),
+) -> TradeDecisionOverrideAnnotationListResponse:
+    return TradeDecisionOverrideAnnotationListResponse(
+        items=[
+            TradeDecisionOverrideAnnotation(**item)
+            for item in repository.list_annotations(
+                symbol=symbol,
+                reason_category=reason_category,
+                behavior_tag=behavior_tag,
+                days=days,
+                limit=limit,
+            )
+        ]
+    )
+
+
+@router.get("/behavior/annotations/{decision_id}", response_model=TradeDecisionOverrideAnnotation)
+def get_trade_decision_override_annotation(
+    decision_id: str,
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    repository: TradeDecisionOverrideAnnotationRepository = Depends(get_trade_decision_override_annotation_repository),
+) -> TradeDecisionOverrideAnnotation:
+    annotation = repository.get_annotation(decision_id)
+    if annotation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override annotation not found")
+    return TradeDecisionOverrideAnnotation(**annotation)
+
+
+@router.put("/behavior/annotations/{decision_id}", response_model=TradeDecisionOverrideAnnotation)
+def upsert_trade_decision_override_annotation(
+    decision_id: str,
+    payload: TradeDecisionOverrideAnnotationRequest,
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    decision_repository: TradeDecisionRepository = Depends(get_trade_decision_repository),
+    alignment_service: TradeDecisionExecutionAlignmentService = Depends(get_trade_decision_execution_alignment_service),
+    annotation_repository: TradeDecisionOverrideAnnotationRepository = Depends(get_trade_decision_override_annotation_repository),
+) -> TradeDecisionOverrideAnnotation:
+    decision = decision_repository.get_decision(decision_id)
+    if decision is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trade decision not found")
+    alignment = alignment_service.get_alignment(decision_id)
+    symbol = alignment.symbol if alignment else normalize_longbridge_symbol(str(decision.get("symbol") or ""))
+    document = {
+        **payload.model_dump(),
+        "decision_id": decision_id,
+        "symbol": symbol,
+        "decision_date": alignment.decision_date if alignment else _decision_date_from_document(decision),
+        "alignment_label": alignment.alignment_label if alignment else None,
+        "behavior_tags": alignment.behavior_tags if alignment else [],
+        "enabled": True,
+    }
+    return TradeDecisionOverrideAnnotation(**annotation_repository.upsert_annotation(decision_id, document))
+
+
+@router.delete("/behavior/annotations/{decision_id}", response_model=TradeDecisionOverrideAnnotation)
+def delete_trade_decision_override_annotation(
+    decision_id: str,
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    repository: TradeDecisionOverrideAnnotationRepository = Depends(get_trade_decision_override_annotation_repository),
+) -> TradeDecisionOverrideAnnotation:
+    annotation = repository.delete_annotation(decision_id)
+    if annotation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override annotation not found")
+    return TradeDecisionOverrideAnnotation(**annotation)
+
+
+@router.get("/behavior/profile", response_model=TradeDecisionBehaviorProfileResponse)
+def get_trade_decision_behavior_profile(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    reason_category: str | None = Query(default=None),
+    min_count: int = Query(default=1, ge=1, le=1000),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionBehaviorProfileService = Depends(get_trade_decision_behavior_profile_service),
+) -> TradeDecisionBehaviorProfileResponse:
+    return service.build_profile(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        symbol=symbol,
+        decision_type=decision_type,
+        behavior_tag=behavior_tag,
+        reason_category=reason_category,
+        min_count=min_count,
+        limit=limit,
+    )
+
+
+@router.get("/behavior/insights", response_model=list[TradeDecisionBehaviorInsight])
+def get_trade_decision_behavior_insights(
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    symbol: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    reason_category: str | None = Query(default=None),
+    min_count: int = Query(default=1, ge=1, le=1000),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionBehaviorProfileService = Depends(get_trade_decision_behavior_profile_service),
+) -> list[TradeDecisionBehaviorInsight]:
+    return service.build_profile(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        symbol=symbol,
+        decision_type=decision_type,
+        behavior_tag=behavior_tag,
+        reason_category=reason_category,
+        min_count=min_count,
+        limit=limit,
+    ).insights
+
+
+@router.get("/behavior/symbol/{symbol}", response_model=TradeDecisionBehaviorProfileResponse)
+def get_trade_decision_symbol_behavior_profile(
+    symbol: str,
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    days: int = Query(default=180, ge=1, le=3650),
+    decision_type: str | None = Query(default=None),
+    behavior_tag: str | None = Query(default=None),
+    reason_category: str | None = Query(default=None),
+    min_count: int = Query(default=1, ge=1, le=1000),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    _auth_session: AuthSession = Depends(require_authenticated_session),
+    service: TradeDecisionBehaviorProfileService = Depends(get_trade_decision_behavior_profile_service),
+) -> TradeDecisionBehaviorProfileResponse:
+    return service.build_profile(
+        start_date=_parse_query_date(start_date, "start_date"),
+        end_date=_parse_query_date(end_date, "end_date"),
+        days=days,
+        symbol=symbol,
+        decision_type=decision_type,
+        behavior_tag=behavior_tag,
+        reason_category=reason_category,
+        min_count=min_count,
+        limit=limit,
+    )
+
+
+def _decision_date_from_document(document: dict) -> str | None:
+    created_at = str(document.get("created_at") or "")
+    return created_at[:10] if len(created_at) >= 10 else None
 
 
 @router.get("/symbol/{symbol}", response_model=TradeDecisionListResponse)

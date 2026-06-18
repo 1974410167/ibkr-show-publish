@@ -239,8 +239,9 @@ class AdminSystemStatusService:
             email_settings = email_service.get_settings()
             daily_review_enabled = bool(email_settings.daily_review_email_enabled)
             daily_snapshot_enabled = bool(email_settings.daily_snapshot_email_enabled)
+            action_alerts_enabled = bool(email_settings.portfolio_action_alerts_email_enabled)
             smtp_configured = bool(email_settings.smtp_host)
-            any_enabled = daily_review_enabled or daily_snapshot_enabled
+            any_enabled = daily_review_enabled or daily_snapshot_enabled or action_alerts_enabled
             configured = any_enabled and smtp_configured
             return SystemComponentStatus(
                 name="email",
@@ -252,6 +253,7 @@ class AdminSystemStatusService:
                     "smtp_host": email_settings.smtp_host,
                     "daily_review_email_enable": daily_review_enabled,
                     "daily_snapshot_email_enable": daily_snapshot_enabled,
+                    "portfolio_action_alerts_email_enable": action_alerts_enabled,
                 },
             )
         except Exception as exc:

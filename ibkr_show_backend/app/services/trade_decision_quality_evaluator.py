@@ -15,6 +15,7 @@ QUALITY_VERSION = "trade_decision_quality_v1"
 EXPECTED_GRAPH_NODES = [
     "build_account_facts",
     "load_user_investment_policy",
+    "load_behavior_profile_context",
     "account_fit",
     "market_trend",
     "fundamental_valuation",
@@ -34,6 +35,7 @@ EXPECTED_GRAPH_NODES = [
 CORE_GRAPH_NODES = {
     "build_account_facts",
     "load_user_investment_policy",
+    "load_behavior_profile_context",
     "build_card_pack",
     "ai_policy_assessment",
     "debate_judge",

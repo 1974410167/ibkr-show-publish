@@ -25,6 +25,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.investment_policy import router as investment_policy_router
 from app.api.routes.longbridge import router as longbridge_router
 from app.api.routes.market_events import router as market_events_router
+from app.api.routes.performance import router as performance_router
 from app.api.routes.positions import router as positions_router
 from app.api.routes.risk_assessment_agent import router as risk_assessment_agent_router
 from app.api.routes.symbol_analysis import router as symbol_analysis_router
@@ -32,6 +33,7 @@ from app.api.routes.symbols import router as symbols_router
 from app.api.routes.trade_decision_agent import router as trade_decision_agent_router
 from app.api.routes.trade_review_agent import router as trade_review_agent_router
 from app.api.routes.trades import router as trades_router
+from app.domains.portfolio_manager.api.routes import router as portfolio_manager_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(account_router)
@@ -58,6 +60,8 @@ api_router.include_router(dividends_router)
 api_router.include_router(investment_policy_router)
 api_router.include_router(longbridge_router)
 api_router.include_router(market_events_router)
+api_router.include_router(performance_router)
+api_router.include_router(portfolio_manager_router)
 api_router.include_router(positions_router)
 api_router.include_router(risk_assessment_agent_router)
 api_router.include_router(symbol_analysis_router)

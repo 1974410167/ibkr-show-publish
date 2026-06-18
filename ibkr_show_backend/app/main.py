@@ -41,3 +41,16 @@ def _cleanup_stale_agent_tasks() -> None:
             logger.info("startup: marked %d stale agent task(s) as failed", count)
     except Exception:
         logger.exception("startup stale task cleanup failed")
+
+
+@app.on_event("startup")
+def _log_portfolio_daily_loop_schedule_mode() -> None:
+    if not settings.portfolio_daily_loop_schedule_enabled:
+        return
+    logger.info(
+        "portfolio daily loop schedule enabled; use internal API or external cron",
+        extra={
+            "schedule_time": settings.portfolio_daily_loop_schedule_time,
+            "timezone": settings.portfolio_daily_loop_schedule_timezone,
+        },
+    )

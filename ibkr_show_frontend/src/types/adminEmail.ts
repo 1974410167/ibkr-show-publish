@@ -18,6 +18,9 @@ export type EmailSettings = {
   daily_snapshot_email_enabled: boolean
   daily_snapshot_email_to: string
   daily_snapshot_subject_prefix: string
+  portfolio_action_alerts_email_enabled: boolean
+  portfolio_action_alerts_email_to: string
+  portfolio_action_alerts_subject_prefix: string
 }
 
 export type EmailSettingsPayload = {
@@ -35,6 +38,9 @@ export type EmailSettingsPayload = {
   daily_snapshot_email_enabled: boolean
   daily_snapshot_email_to: string
   daily_snapshot_subject_prefix?: string
+  portfolio_action_alerts_email_enabled?: boolean
+  portfolio_action_alerts_email_to?: string
+  portfolio_action_alerts_subject_prefix?: string
 }
 
 export type EmailSettingsMutationResponse = {

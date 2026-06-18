@@ -390,6 +390,41 @@ def test_send_daily_account_snapshot_disabled_returns_false(tmp_path: Path, monk
     assert len(DummySMTP.instances) == 0
 
 
+def test_send_portfolio_action_alerts_disabled_returns_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    DummySMTP.instances.clear()
+    monkeypatch.setattr("app.services.email_service.smtplib.SMTP_SSL", DummySMTP)
+    service = _service(tmp_path)
+    service.update_settings(_valid_payload(portfolio_action_alerts_email_enabled=False, portfolio_action_alerts_email_to=""))
+
+    sent = service.send_portfolio_action_alerts([], subject="subject", html_body="<p>body</p>", text_body="body")
+
+    assert sent is False
+    assert len(DummySMTP.instances) == 0
+
+
+def test_send_portfolio_action_alerts_enabled_uses_existing_send(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    DummySMTP.instances.clear()
+    monkeypatch.setattr("app.services.email_service.smtplib.SMTP_SSL", DummySMTP)
+    service = _service(tmp_path)
+    service.update_settings(
+        _valid_payload(
+            daily_review_email_enabled=False,
+            daily_review_email_to="",
+            portfolio_action_alerts_email_enabled=True,
+            portfolio_action_alerts_email_to="alerts@example.com",
+            portfolio_action_alerts_subject_prefix="IBKR交易行动提醒",
+        )
+    )
+
+    sent = service.send_portfolio_action_alerts([{"symbol": "AMD"}], subject="[IBKR交易行动提醒] AMD 进入加仓复核区", html_body="<p>not an order</p>", text_body="not an order")
+
+    assert sent is True
+    message = DummySMTP.instances[0].messages[0]
+    assert message["To"] == "alerts@example.com"
+    assert message["Subject"] == "[IBKR交易行动提醒] AMD 进入加仓复核区"
+    assert "not an order" in message.get_body(preferencelist=("plain",)).get_content()
+
+
 def test_send_daily_account_snapshot_json_attachment_has_correct_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     DummySMTP.instances.clear()
     monkeypatch.setattr("app.services.email_service.smtplib.SMTP_SSL", DummySMTP)

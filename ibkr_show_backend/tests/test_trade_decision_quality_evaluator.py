@@ -18,6 +18,7 @@ def _base_document() -> dict:
     run_trace = [
         _trace("build_account_facts"),
         _trace("load_user_investment_policy"),
+        _trace("load_behavior_profile_context"),
         _trace("account_fit"),
         _trace("market_trend"),
         _trace("fundamental_valuation"),
@@ -223,6 +224,28 @@ def test_ai_policy_position_order_invalid_is_hard_failure():
 
     assert "ai_policy_position_order_invalid" in result["hard_failures"]
     assert result["checks"]["ai_policy_assessment_integrity"]["passed"] is False
+
+
+def test_ai_policy_not_evaluated_allows_empty_position_guidance_without_hard_failure():
+    doc = _base_document()
+    doc["ai_policy_assessment"] = {
+        "status": "not_evaluated",
+        "ai_assessed_asset_role": "unknown",
+        "ai_role_confidence": "low",
+        "ai_recommended_min_position_pct": None,
+        "ai_recommended_target_position_pct": None,
+        "ai_recommended_max_position_pct": None,
+        "ai_recommended_target_position_range_pct": None,
+        "ai_position_stance": "unknown",
+        "challenge_level": "not_evaluated",
+        "recommended_action_bias": "unknown",
+        "prompt_key": "trade_decision_ai_policy_assessment",
+    }
+
+    result = TradeDecisionQualityEvaluator().evaluate(doc)
+
+    assert result["checks"]["ai_policy_assessment_integrity"]["passed"] is True
+    assert not any(item.startswith("ai_policy_field_missing:") for item in result["hard_failures"])
 
 
 def test_add_like_target_above_ai_max_is_hard_failure():

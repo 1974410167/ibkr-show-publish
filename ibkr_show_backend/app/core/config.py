@@ -39,7 +39,20 @@ class Settings:
     es_price_history_index: str
     es_trade_review_index: str
     es_trade_decision_index: str
+    es_trade_decision_override_annotation_index: str
     es_investment_policy_index: str
+    es_investment_constitution_index: str
+    es_portfolio_universe_index: str
+    es_portfolio_watchtower_runs_index: str
+    es_portfolio_watchtower_items_index: str
+    es_portfolio_auto_decision_runs_index: str
+    es_portfolio_auto_decision_items_index: str
+    es_portfolio_manager_reports_index: str
+    es_portfolio_evaluation_results_index: str
+    es_portfolio_improvement_reports_index: str
+    es_portfolio_daily_loop_runs_index: str
+    es_portfolio_action_alerts_index: str
+    es_account_performance_index: str
     es_daily_position_review_index: str
     es_agent_task_index: str
     es_agent_prompt_index: str
@@ -95,6 +108,18 @@ class Settings:
     cache_ttl_seconds: int
     cache_key_prefix: str
     daily_review_internal_token: str
+    portfolio_daily_loop_schedule_enabled: bool
+    portfolio_daily_loop_schedule_time: str
+    portfolio_daily_loop_schedule_timezone: str
+    portfolio_daily_loop_max_auto_decisions: int
+    portfolio_daily_loop_dry_run_auto_decision: bool
+    portfolio_daily_loop_force_refresh_auto_decision: bool
+    portfolio_daily_loop_run_evaluation: bool
+    portfolio_daily_loop_generate_improvement_report: bool
+    portfolio_daily_loop_internal_token: str
+    performance_price_auto_backfill_enabled: bool
+    performance_price_auto_backfill_max_symbols: int
+    performance_price_auto_backfill_max_days: int
     admin_auth_config_file: str
 
 
@@ -125,7 +150,56 @@ def get_settings() -> Settings:
         es_price_history_index=os.getenv("ES_PRICE_HISTORY_INDEX", "ibkr_symbol_price_history_v1"),
         es_trade_review_index=os.getenv("ES_TRADE_REVIEW_INDEX", "ibkr_trade_reviews_v1"),
         es_trade_decision_index=os.getenv("ES_TRADE_DECISION_INDEX", "ibkr_trade_decisions_v1"),
+        es_trade_decision_override_annotation_index=os.getenv(
+            "ES_TRADE_DECISION_OVERRIDE_ANNOTATION_INDEX",
+            "ibkr_trade_decision_override_annotation_v1",
+        ),
         es_investment_policy_index=os.getenv("ES_INVESTMENT_POLICY_INDEX", "ibkr_investment_policy_v1"),
+        es_investment_constitution_index=os.getenv(
+            "ES_INVESTMENT_CONSTITUTION_INDEX",
+            "ibkr_investment_constitution_v1",
+        ),
+        es_portfolio_universe_index=os.getenv("ES_PORTFOLIO_UNIVERSE_INDEX", "ibkr_portfolio_universe_v1"),
+        es_portfolio_watchtower_runs_index=os.getenv(
+            "ES_PORTFOLIO_WATCHTOWER_RUNS_INDEX",
+            "ibkr_portfolio_watchtower_runs_v1",
+        ),
+        es_portfolio_watchtower_items_index=os.getenv(
+            "ES_PORTFOLIO_WATCHTOWER_ITEMS_INDEX",
+            "ibkr_portfolio_watchtower_items_v1",
+        ),
+        es_portfolio_auto_decision_runs_index=os.getenv(
+            "ES_PORTFOLIO_AUTO_DECISION_RUNS_INDEX",
+            "ibkr_portfolio_auto_decision_runs_v1",
+        ),
+        es_portfolio_auto_decision_items_index=os.getenv(
+            "ES_PORTFOLIO_AUTO_DECISION_ITEMS_INDEX",
+            "ibkr_portfolio_auto_decision_items_v1",
+        ),
+        es_portfolio_manager_reports_index=os.getenv(
+            "ES_PORTFOLIO_MANAGER_REPORTS_INDEX",
+            "ibkr_portfolio_manager_reports_v1",
+        ),
+        es_portfolio_evaluation_results_index=os.getenv(
+            "ES_PORTFOLIO_EVALUATION_RESULTS_INDEX",
+            "ibkr_portfolio_evaluation_results_v1",
+        ),
+        es_portfolio_improvement_reports_index=os.getenv(
+            "ES_PORTFOLIO_IMPROVEMENT_REPORTS_INDEX",
+            "ibkr_portfolio_improvement_reports_v1",
+        ),
+        es_portfolio_daily_loop_runs_index=os.getenv(
+            "ES_PORTFOLIO_DAILY_LOOP_RUNS_INDEX",
+            "ibkr_portfolio_daily_loop_runs_v1",
+        ),
+        es_portfolio_action_alerts_index=os.getenv(
+            "ES_PORTFOLIO_ACTION_ALERTS_INDEX",
+            "ibkr_portfolio_action_alerts_v1",
+        ),
+        es_account_performance_index=os.getenv(
+            "ES_ACCOUNT_PERFORMANCE_INDEX",
+            "ibkr_account_performance_v1",
+        ),
         es_daily_position_review_index=os.getenv("ES_DAILY_POSITION_REVIEW_INDEX", "ibkr_daily_position_reviews_v1"),
         es_agent_task_index=os.getenv("ES_AGENT_TASK_INDEX", "ibkr_agent_tasks_v1"),
         es_agent_prompt_index=os.getenv("ES_AGENT_PROMPT_INDEX", "ibkr_agent_prompts"),
@@ -193,6 +267,18 @@ def get_settings() -> Settings:
         cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3600")),
         cache_key_prefix=os.getenv("CACHE_KEY_PREFIX", "ibkr-show"),
         daily_review_internal_token=os.getenv("DAILY_REVIEW_INTERNAL_TOKEN", ""),
+        portfolio_daily_loop_schedule_enabled=_read_bool("PORTFOLIO_DAILY_LOOP_SCHEDULE_ENABLED", False),
+        portfolio_daily_loop_schedule_time=os.getenv("PORTFOLIO_DAILY_LOOP_SCHEDULE_TIME", "09:00"),
+        portfolio_daily_loop_schedule_timezone=os.getenv("PORTFOLIO_DAILY_LOOP_SCHEDULE_TIMEZONE", "Asia/Shanghai"),
+        portfolio_daily_loop_max_auto_decisions=int(os.getenv("PORTFOLIO_DAILY_LOOP_MAX_AUTO_DECISIONS", "5")),
+        portfolio_daily_loop_dry_run_auto_decision=_read_bool("PORTFOLIO_DAILY_LOOP_DRY_RUN_AUTO_DECISION", False),
+        portfolio_daily_loop_force_refresh_auto_decision=_read_bool("PORTFOLIO_DAILY_LOOP_FORCE_REFRESH_AUTO_DECISION", False),
+        portfolio_daily_loop_run_evaluation=_read_bool("PORTFOLIO_DAILY_LOOP_RUN_EVALUATION", False),
+        portfolio_daily_loop_generate_improvement_report=_read_bool("PORTFOLIO_DAILY_LOOP_GENERATE_IMPROVEMENT_REPORT", False),
+        portfolio_daily_loop_internal_token=os.getenv("PORTFOLIO_DAILY_LOOP_INTERNAL_TOKEN", ""),
+        performance_price_auto_backfill_enabled=_read_bool("PERFORMANCE_PRICE_AUTO_BACKFILL_ENABLED", True),
+        performance_price_auto_backfill_max_symbols=int(os.getenv("PERFORMANCE_PRICE_AUTO_BACKFILL_MAX_SYMBOLS", "50")),
+        performance_price_auto_backfill_max_days=int(os.getenv("PERFORMANCE_PRICE_AUTO_BACKFILL_MAX_DAYS", "730")),
         admin_auth_config_file=os.getenv(
             "ADMIN_AUTH_CONFIG_FILE",
             str(BASE_DIR / "data" / "config" / "admin_auth.json"),

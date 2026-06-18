@@ -101,6 +101,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/portfolio-manager',
+      name: 'portfolio-manager',
+      component: () => import('@/views/PortfolioManagerView.vue'),
+      meta: {
+        requiresAuth: true,
+      },
+    },
+    {
       path: '/admin/llm',
       name: 'admin-llm',
       component: () => import('@/views/AdminLlmView.vue'),
